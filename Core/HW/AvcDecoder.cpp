@@ -21,16 +21,41 @@
 #include "Core/HW/AvcDecoder.h"
 
 #include <formats/rh264.h>
+#include <libretro.h>
+
+static const retro_video_decode_interface *frontendDecoder;
+
+void AvcDecoder::SetFrontendDecoder(const retro_video_decode_interface *iface) {
+	frontendDecoder = iface;
+}
 
 AvcDecoder::AvcDecoder() {
+	Open();
+}
+
+void AvcDecoder::Open() {
+	frontend_ = frontendDecoder;
+	if (frontend_)
+		frontendDecoder_ = frontend_->open();
+	if (frontendDecoder_)
+		return;
+	frontend_ = nullptr;
 	dec_ = rh264_video_open();
 	if (!dec_)
 		ERROR_LOG(Log::ME, "AvcDecoder: couldn't allocate the H.264 decoder");
 }
 
 AvcDecoder::~AvcDecoder() {
+	Close();
+}
+
+void AvcDecoder::Close() {
+	if (frontendDecoder_)
+		frontend_->close(frontendDecoder_);
+	frontendDecoder_ = nullptr;
 	if (dec_)
 		rh264_video_close(dec_);
+	dec_ = nullptr;
 }
 
 bool AvcDecoder::IsAvailable() {
@@ -40,9 +65,25 @@ bool AvcDecoder::IsAvailable() {
 void AvcDecoder::Flush() {
 	haveFrame_ = false;
 	lastResult_ = 0;
-	if (dec_)
-		rh264_video_close(dec_);
-	dec_ = rh264_video_open();
+	Close();
+	reportedDecoder_ = false;
+	Open();
+}
+
+bool AvcDecoder::TakeFrontendFrame(const retro_video_decode_frame &frame) {
+	for (int i = 0; i < 3; i++) {
+		planes_[i] = frame.planes[i];
+		strides_[i] = frame.strides[i];
+	}
+	width_ = frame.width;
+	height_ = frame.height;
+	if (!reportedDecoder_) {
+		INFO_LOG(Log::ME, "AvcDecoder: frontend %s H.264 decoding active (%dx%d)", frame.hardware ? "hardware" : "software", width_, height_);
+		reportedDecoder_ = true;
+	}
+	frameCount_++;
+	haveFrame_ = width_ > 0 && height_ > 0 && planes_[0] && planes_[1] && planes_[2];
+	return haveFrame_;
 }
 
 bool AvcDecoder::TakeFrame() {
@@ -71,10 +112,12 @@ bool AvcDecoder::TakeFrame() {
 bool AvcDecoder::Decode(const u8 *data, int size) {
 	haveFrame_ = false;
 	lastResult_ = -1;
-	if (!dec_ || !data || size <= 0)
+	if ((!dec_ && !frontendDecoder_) || !data || size <= 0)
 		return false;
 
-	const int r = rh264_video_decode(dec_, data, (size_t)size);
+	retro_video_decode_frame frame{};
+	const int r = frontendDecoder_ ? frontend_->decode(frontendDecoder_, data, (size_t)size, &frame)
+		: rh264_video_decode(dec_, data, (size_t)size);
 	if (r < 0) {
 		// A unit the decoder refuses leaves the pictures predicted from it wrong until the next
 		// key frame. That is a damaged or unsupported stream, not a decoder fault.
@@ -95,13 +138,19 @@ bool AvcDecoder::Decode(const u8 *data, int size) {
 		lastResult_ = 0;
 		return false;
 	}
-	lastResult_ = TakeFrame() ? 1 : -2;
+	lastResult_ = (frontendDecoder_ ? TakeFrontendFrame(frame) : TakeFrame()) ? 1 : -2;
 	return lastResult_ == 1;
 }
 
 bool AvcDecoder::Drain() {
 	haveFrame_ = false;
 	lastResult_ = 0;
+	retro_video_decode_frame frame{};
+	if (frontendDecoder_) {
+		const int result = frontend_->drain(frontendDecoder_, &frame);
+		lastResult_ = result == 1 ? (TakeFrontendFrame(frame) ? 1 : -2) : result;
+		return lastResult_ == 1;
+	}
 	if (!dec_ || rh264_video_drain(dec_) != 0)
 		return false;
 	lastResult_ = TakeFrame() ? 1 : -2;

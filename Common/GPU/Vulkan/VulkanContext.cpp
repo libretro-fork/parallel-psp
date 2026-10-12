@@ -641,7 +641,8 @@ bool VulkanContext::EnableInstanceExtension(const char *extension, uint32_t core
 	return false;
 }
 
-VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<const char *> &extraDeviceExtensions, const VkPhysicalDeviceFeatures *extraRequiredFeatures) {
+VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<const char *> &extraDeviceExtensions, const VkPhysicalDeviceFeatures *extraRequiredFeatures,
+	VkDevice (*createDevice)(VkPhysicalDevice, void *, const VkDeviceCreateInfo *), void *createDeviceUser) {
 	physical_device_ = physical_device;
 	INFO_LOG(Log::G3D, "Chose physical device %d: %s", physical_device, physicalDeviceProperties_[physical_device].properties.deviceName);
 
@@ -845,7 +846,13 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		device_info.pEnabledFeatures = &deviceFeatures_.enabled.standard;
 	}
 
-	VkResult res = vkCreateDevice(physical_devices_[physical_device_], &device_info, nullptr, &device_);
+	VkResult res;
+	if (createDevice) {
+		device_ = createDevice(physical_devices_[physical_device_], createDeviceUser, &device_info);
+		res = device_ ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+	} else {
+		res = vkCreateDevice(physical_devices_[physical_device_], &device_info, nullptr, &device_);
+	}
 	if (res != VK_SUCCESS) {
 		init_error_ = "Unable to create Vulkan device";
 		ERROR_LOG(Log::G3D, "%s", init_error_.c_str());

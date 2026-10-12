@@ -22,6 +22,8 @@
 #include "Common/CommonTypes.h"
 
 struct rh264_video;
+struct retro_video_decode_interface;
+struct retro_video_decode_frame;
 
 // A plain "hand it one access unit, get a frame back" H.264 decoder.
 //
@@ -65,12 +67,19 @@ public:
 
 	// Whether anything decodes at all.
 	static bool IsAvailable();
+	static void SetFrontendDecoder(const retro_video_decode_interface *iface);
 
 private:
 	// The frame the last Decode or Drain gave, from the decoder.
 	bool TakeFrame();
+	bool TakeFrontendFrame(const retro_video_decode_frame &frame);
+	void Open();
+	void Close();
 
 	rh264_video *dec_ = nullptr;
+	const retro_video_decode_interface *frontend_ = nullptr;
+	void *frontendDecoder_ = nullptr;
+	bool reportedDecoder_ = false;
 	const u8 *planes_[3]{};
 	int strides_[3]{};
 	bool haveFrame_ = false;

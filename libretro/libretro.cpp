@@ -32,6 +32,7 @@
 #include "Core/Config.h"
 #include "Core/ConfigValues.h"
 #include "Core/Core.h"
+#include "Core/HW/AvcDecoder.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/HLE/sceCtrl.h"
 #include "Core/HLE/sceUtility.h"
@@ -236,9 +237,16 @@ static bool set_variable_visibility(void)
    return updated;
 }
 
+static retro_video_decode_interface videoDecodeInterface{};
+
 void retro_set_environment(retro_environment_t cb)
 {
    environ_cb = cb;
+   videoDecodeInterface = {};
+   videoDecodeInterface.interface_version = RETRO_VIDEO_DECODE_INTERFACE_VERSION;
+   AvcDecoder::SetFrontendDecoder(environ_cb(RETRO_ENVIRONMENT_GET_VIDEO_DECODE_INTERFACE, &videoDecodeInterface)
+         && videoDecodeInterface.open && videoDecodeInterface.decode && videoDecodeInterface.drain
+         && videoDecodeInterface.close ? &videoDecodeInterface : nullptr);
 
    bool option_categories = false;
    libretro_set_core_options(environ_cb, &option_categories);

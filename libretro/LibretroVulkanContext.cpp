@@ -37,7 +37,7 @@ void LibretroVulkanContext::SwapBuffers() {
 	LibretroHWRenderContext::SwapBuffers();
 }
 
-static bool create_device(retro_vulkan_context *context, VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR surface, PFN_vkGetInstanceProcAddr get_instance_proc_addr, const char **required_device_extensions, unsigned num_required_device_extensions, const char **required_device_layers, unsigned num_required_device_layers, const VkPhysicalDeviceFeatures *required_features) {
+static bool create_device_internal(retro_vulkan_context *context, VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR surface, PFN_vkGetInstanceProcAddr get_instance_proc_addr, const char **required_device_extensions, unsigned num_required_device_extensions, const char **required_device_layers, unsigned num_required_device_layers, const VkPhysicalDeviceFeatures *required_features, retro_vulkan_create_device_wrapper_t wrapper = nullptr, void *opaque = nullptr) {
 	init_glslang();
 
 	vk = new VulkanContext();
@@ -72,8 +72,10 @@ static bool create_device(retro_vulkan_context *context, VkInstance instance, Vk
 		physical_device = vk->GetBestPhysicalDevice();
 	}
 
-	std::vector<const char *> extraDeviceExtensions(required_device_extensions, required_device_extensions + num_required_device_extensions);
-	if (vk->CreateDevice(physical_device, extraDeviceExtensions, required_features) != VK_SUCCESS) {
+	std::vector<const char *> extraDeviceExtensions;
+	if (num_required_device_extensions)
+		extraDeviceExtensions.assign(required_device_extensions, required_device_extensions + num_required_device_extensions);
+	if (vk->CreateDevice(physical_device, extraDeviceExtensions, required_features, wrapper, opaque) != VK_SUCCESS) {
 		ERROR_LOG(Log::G3D, "Failed to create Vulkan device: %s", vk->InitError().c_str());
 		delete vk;
 		vk = nullptr;
@@ -123,6 +125,14 @@ static bool create_device(retro_vulkan_context *context, VkInstance instance, Vk
 	return true;
 }
 
+static bool create_device(retro_vulkan_context *context, VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR surface, PFN_vkGetInstanceProcAddr get_instance_proc_addr, const char **extensions, unsigned num_extensions, const char **layers, unsigned num_layers, const VkPhysicalDeviceFeatures *features) {
+	return create_device_internal(context, instance, gpu, surface, get_instance_proc_addr, extensions, num_extensions, layers, num_layers, features);
+}
+
+static bool create_device2(retro_vulkan_context *context, VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR surface, PFN_vkGetInstanceProcAddr get_instance_proc_addr, retro_vulkan_create_device_wrapper_t wrapper, void *opaque) {
+	return create_device_internal(context, instance, gpu, surface, get_instance_proc_addr, nullptr, 0, nullptr, 0, nullptr, wrapper, opaque);
+}
+
 static const VkApplicationInfo *GetApplicationInfo(void) {
 	static VkApplicationInfo app_info{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
 	app_info.pApplicationName = "PPSSPP";
@@ -142,8 +152,10 @@ bool LibretroVulkanContext::InitAPI(void *wnd, std::string *deviceName, std::str
 		RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN,
 		RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN_VERSION,
 		GetApplicationInfo,
-		create_device, // Callback above.
+		create_device,
 		nullptr,
+		nullptr,
+		create_device2,
 	};
 	Libretro::environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE, (void *)&iface);
 

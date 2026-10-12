@@ -84,6 +84,8 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
+#include "Core/HW/AvcDecoder.h"
+#include <libretro.h>
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/File/VFS/VFS.h"
 #include "Common/File/VFS/DirectoryReader.h"
@@ -2899,9 +2901,86 @@ bool TestFatShortNames() {
 	return true;
 }
 
+static int avcFrontendOpened, avcFrontendClosed;
+struct AvcFrontendFixture {
+	int packets = 0;
+	bool drained = false;
+	u8 pixels[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+};
+
+bool TestAvcFrontend() {
+	avcFrontendOpened = avcFrontendClosed = 0;
+	retro_video_decode_interface iface{};
+	iface.interface_version = RETRO_VIDEO_DECODE_INTERFACE_VERSION;
+	iface.open = []() -> void * {
+		avcFrontendOpened++;
+		return new AvcFrontendFixture();
+	};
+	iface.decode = [](void *decoder, const uint8_t *data, size_t size, retro_video_decode_frame *frame) -> int {
+		auto *fixture = static_cast<AvcFrontendFixture *>(decoder);
+		if (!size || data[0] == 0xff)
+			return -1;
+		if (++fixture->packets == 1)
+			return 0;
+		*frame = {{fixture->pixels, fixture->pixels + 8, fixture->pixels + 10}, {4, 2, 2}, 4, 2, true};
+		return 1;
+	};
+	iface.drain = [](void *decoder, retro_video_decode_frame *frame) -> int {
+		auto *fixture = static_cast<AvcFrontendFixture *>(decoder);
+		if (fixture->drained)
+			return 0;
+		fixture->drained = true;
+		*frame = {{fixture->pixels, fixture->pixels + 8, fixture->pixels + 10}, {4, 2, 2}, 4, 2, true};
+		return 1;
+	};
+	iface.close = [](void *decoder) {
+		avcFrontendClosed++;
+		delete static_cast<AvcFrontendFixture *>(decoder);
+	};
+	struct ResetFrontend {
+		~ResetFrontend() { AvcDecoder::SetFrontendDecoder(nullptr); }
+	} reset;
+	AvcDecoder::SetFrontendDecoder(&iface);
+	{
+		AvcDecoder decoder;
+		const u8 data[] = {0}, bad[] = {0xff};
+		EXPECT_EQ_INT(avcFrontendOpened, 1);
+		EXPECT_FALSE(decoder.Decode(data, sizeof(data)));
+		EXPECT_EQ_INT(decoder.LastResult(), 0);
+		EXPECT_TRUE(decoder.Decode(data, sizeof(data)));
+		EXPECT_EQ_INT(decoder.Width(), 4);
+		EXPECT_EQ_INT(decoder.Height(), 2);
+		EXPECT_EQ_INT(decoder.Stride(1), 2);
+		EXPECT_EQ_INT(decoder.Plane(0)[7], 8);
+		EXPECT_EQ_INT(decoder.Plane(1)[1], 10);
+		EXPECT_EQ_INT(decoder.Plane(2)[1], 12);
+		EXPECT_FALSE(decoder.Decode(bad, sizeof(bad)));
+		EXPECT_EQ_INT(decoder.LastResult(), -1);
+		EXPECT_TRUE(decoder.Plane(0) == nullptr);
+		EXPECT_TRUE(decoder.Drain());
+		EXPECT_FALSE(decoder.Drain());
+		decoder.Flush();
+		EXPECT_EQ_INT(avcFrontendClosed, 1);
+		EXPECT_EQ_INT(avcFrontendOpened, 2);
+		EXPECT_FALSE(decoder.HasFrame());
+		EXPECT_FALSE(decoder.Decode(data, sizeof(data)));
+		EXPECT_TRUE(decoder.Decode(data, sizeof(data)));
+	}
+	EXPECT_EQ_INT(avcFrontendOpened, avcFrontendClosed);
+	iface.open = []() -> void * { return nullptr; };
+	{
+		AvcDecoder fallback;
+		EXPECT_TRUE(AvcDecoder::IsAvailable());
+		fallback.Flush();
+		EXPECT_FALSE(fallback.HasFrame());
+	}
+	return true;
+}
+
 bool TestTextureReplacer();
 
 TestItem availableTests[] = {
+	TEST_ITEM(AvcFrontend),
 #if PPSSPP_ARCH(ARM64) || PPSSPP_ARCH(AMD64) || PPSSPP_ARCH(X86)
 	TEST_ITEM(Arm64Emitter),
 #endif

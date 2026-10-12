@@ -227,7 +227,9 @@ public:
 	// the underlying vkCreateDevice call.
 	VkResult CreateDevice(int physical_device,
 		const std::vector<const char *> &extraDeviceExtensions = {},
-		const VkPhysicalDeviceFeatures *extraRequiredFeatures = nullptr);
+		const VkPhysicalDeviceFeatures *extraRequiredFeatures = nullptr,
+		VkDevice (*createDevice)(VkPhysicalDevice, void *, const VkDeviceCreateInfo *) = nullptr,
+		void *createDeviceUser = nullptr);
 
 	// Some host applications (e.g. a libretro frontend, per its create_device contract) take over
 	// responsibility for eventually destroying the VkDevice once we've handed it back to them, even

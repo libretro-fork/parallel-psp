@@ -530,7 +530,7 @@ add_library(libretro-common STATIC
 	libretro/libretro-common/time/rtime.c
 	libretro/libretro-common/vfs/vfs_implementation.c)
 target_include_directories(libretro-common PUBLIC libretro/libretro-common/include)
-target_compile_definitions(libretro-common PUBLIC HAVE_RZSTD HAVE_RFLAC
+target_compile_definitions(libretro-common PUBLIC HAVE_THREADS HAVE_RZSTD HAVE_RFLAC
 	HAVE_RCHD_DEFLATE HAVE_RCHD_LZMA HAVE_RCHD_FLAC HAVE_RCHD_ZSTD)
 target_link_libraries(libretro-common Threads::Threads)
 

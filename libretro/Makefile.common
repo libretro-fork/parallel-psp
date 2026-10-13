@@ -810,7 +810,7 @@ SOURCES_C += $(LIBRETROCOMMONDIR)/compat/compat_posix_string.c \
              $(LIBRETROCOMMONDIR)/vfs/vfs_implementation.c
 
 # Codecs: zlib-format deflate, zstd, CHD, zip and PNG.
-COREFLAGS += -DHAVE_RZSTD -DHAVE_RFLAC -DHAVE_RCHD_DEFLATE -DHAVE_RCHD_LZMA -DHAVE_RCHD_FLAC -DHAVE_RCHD_ZSTD
+COREFLAGS += -DHAVE_THREADS -DHAVE_RZSTD -DHAVE_RFLAC -DHAVE_RCHD_DEFLATE -DHAVE_RCHD_LZMA -DHAVE_RCHD_FLAC -DHAVE_RCHD_ZSTD
 SOURCES_C += $(LIBRETROCOMMONDIR)/encodings/encoding_crc32.c \
              $(LIBRETROCOMMONDIR)/encodings/encoding_deflate.c \
              $(LIBRETROCOMMONDIR)/encodings/encoding_huffman.c \

@@ -44,42 +44,6 @@ SOURCES_C += \
 	$(EXTDIR)/libkirk/ec.c \
 	$(EXTDIR)/libkirk/kirk_engine.c
 
-INCFLAGS += -I$(EXTDIR)/lua
-
-SOURCES_C += \
-	$(EXTDIR)/lua/lapi.c \
-	$(EXTDIR)/lua/lauxlib.c \
-	$(EXTDIR)/lua/lbaselib.c \
-	$(EXTDIR)/lua/lcode.c \
-	$(EXTDIR)/lua/lcorolib.c \
-	$(EXTDIR)/lua/lctype.c \
-	$(EXTDIR)/lua/ldblib.c \
-	$(EXTDIR)/lua/ldebug.c \
-	$(EXTDIR)/lua/ldo.c \
-	$(EXTDIR)/lua/ldump.c \
-	$(EXTDIR)/lua/lfunc.c \
-	$(EXTDIR)/lua/lgc.c \
-	$(EXTDIR)/lua/linit.c \
-	$(EXTDIR)/lua/liolib.c \
-	$(EXTDIR)/lua/llex.c \
-	$(EXTDIR)/lua/lmathlib.c \
-	$(EXTDIR)/lua/lmem.c \
-	$(EXTDIR)/lua/loadlib.c \
-	$(EXTDIR)/lua/lobject.c \
-	$(EXTDIR)/lua/lopcodes.c \
-	$(EXTDIR)/lua/loslib.c \
-	$(EXTDIR)/lua/lparser.c \
-	$(EXTDIR)/lua/lstate.c \
-	$(EXTDIR)/lua/lstring.c \
-	$(EXTDIR)/lua/lstrlib.c \
-	$(EXTDIR)/lua/ltable.c \
-	$(EXTDIR)/lua/ltablib.c \
-	$(EXTDIR)/lua/ltm.c \
-	$(EXTDIR)/lua/lundump.c \
-	$(EXTDIR)/lua/lutf8lib.c \
-	$(EXTDIR)/lua/lvm.c \
-	$(EXTDIR)/lua/lzio.c
-
 COREFLAGS += -DSTACK_LINE_READER_BUFFER_SIZE=1024
 COREFLAGS += -DHTTPS_NOT_AVAILABLE
 
@@ -467,7 +431,6 @@ SOURCES_CXX += \
 	       $(COREDIR)/Core.cpp \
 	       $(COREDIR)/KeyMap.cpp \
 	       $(COREDIR)/KeyMapDefaults.cpp \
-	       $(COREDIR)/LuaContext.cpp \
 	       $(COREDIR)/FileLoaders/HTTPFileLoader.cpp \
 	       $(COREDIR)/FileLoaders/CachingFileLoader.cpp \
 	       $(COREDIR)/FileLoaders/DiskCachingFileLoader.cpp \

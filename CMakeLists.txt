@@ -152,7 +152,6 @@ option(SIMULATOR "Set to ON when targeting an x86 simulator of an ARM platform" 
 # :: Options
 option(USE_LIBNX "Set to ON to build for Switch(libnx)" OFF)
 option(USE_SYSTEM_SNAPPY "Dynamically link against system snappy" ${USE_SYSTEM_SNAPPY})
-option(USE_SYSTEM_RAPIDJSON "Build using system rapidjson" ${USE_SYSTEM_RAPIDJSON})
 option(USE_ASAN "Use address sanitizer" OFF)
 option(USE_UBSAN "Use undefined behaviour sanitizer" OFF)
 option(USE_CCACHE "Use ccache if detected" ON)
@@ -160,10 +159,6 @@ option(USE_NO_MMAP "Disable mmap usage" OFF)
 
 if(USE_CCACHE)
 	include(ccache)
-endif()
-
-if(USE_SYSTEM_RAPIDJSON)
-	add_compile_definitions(SYSTEM_RAPIDJSON)
 endif()
 
 
@@ -537,7 +532,6 @@ add_subdirectory(ext)
 
 include_directories(ext/OpenXR-SDK/include)
 
-# For ext/sol includes, that are usually included as sol/*.hpp
 include_directories(ext)
 
 include_directories(Common)

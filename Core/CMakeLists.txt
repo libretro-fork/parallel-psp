@@ -156,8 +156,6 @@ add_library(Core STATIC
 	KeyMap.h
 	KeyMapDefaults.cpp
 	KeyMapDefaults.h
-	LuaContext.cpp
-	LuaContext.h
 	Debugger/Breakpoints.cpp
 	Debugger/Breakpoints.h
 	Debugger/DebugInterface.h
@@ -542,7 +540,7 @@ endif()
 
 list(APPEND CoreExtraLibs armips)
 
-target_link_libraries(Core GPU Common libretro-common kirk cityhash sfmt19937 xbrz xxhash lua
+target_link_libraries(Core GPU Common libretro-common kirk cityhash sfmt19937 xbrz xxhash
 	aemu_postoffice_client ${CoreExtraLibs} ${CMAKE_DL_LIBS})
 
 # Winsock

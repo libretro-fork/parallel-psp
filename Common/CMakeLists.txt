@@ -351,7 +351,7 @@ if(WIN32)
 	target_link_libraries(Common winmm dsound dxguid d2d1 dwrite d3d11 Version dbghelp)
 endif()
 
-target_link_libraries(Common 7zip basis_universal pugixml vma gason udis86 libretro-common ${RT_LIB} ${ATOMIC_LIB})
+target_link_libraries(Common 7zip basis_universal vma gason udis86 libretro-common ${RT_LIB} ${ATOMIC_LIB})
 
 # Common/GPU/ShaderTranslation.cpp and Common/GPU/Vulkan/VulkanContext.cpp call directly into
 # glslang/spirv-cross, so Common needs to declare this dependency itself rather than relying on

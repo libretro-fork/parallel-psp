@@ -143,7 +143,6 @@ static const AdhocServerList *CurrentServerList() {
 	return (const AdhocServerList *)retro_atomic_load_acquire_ptr(&g_proAdhocServerList);
 }
 
-// TODO: Should convert this to use rapidjson
 static bool ParseServerListEntriesJSON(std::string_view json) {
 	using namespace json;
 

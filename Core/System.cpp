@@ -26,8 +26,6 @@
 
 #include <retro_atomic.h>
 
-#include "ext/lua/lapi.h"
-
 #include "Common/System/System.h"
 #include "Common/System/Request.h"
 #include "Common/System/OSD.h"
@@ -66,7 +64,6 @@
 #include "Core/FileSystems/MetaFileSystem.h"
 #include "Core/FileSystems/ISOFileSystem.h"
 #include "Core/FileSystems/DirectoryFileSystem.h"
-#include "Core/LuaContext.h"
 #include "Core/Loaders.h"
 #include "Core/PSPLoaders.h"
 #include "Core/ELF/ParamSFO.h"
@@ -470,8 +467,6 @@ static bool CPU_Init(FileLoader *fileLoader, IdentifiedFileType type, std::strin
 	MIPSAnalyst::Reset();
 	Replacement_Init();
 
-	g_lua.Init();
-
 	// Here we have read the PARAM.SFO, let's see if we need any compatibility overrides.
 	// Homebrew get fake disc IDs assigned to the global paramSFO, so they shouldn't clash with real games.
 
@@ -653,8 +648,6 @@ void CPU_Shutdown(bool success) {
 	// Line info outlives individual modules on purpose (see ~PSPModule), so the game going away is
 	// what ends it.
 	g_lineInfo.Clear();
-
-	g_lua.Shutdown();
 
 	g_logManager.EnableOutput(LogOutput::File, g_fileLoggingWasEnabled);
 }

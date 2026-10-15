@@ -29,7 +29,6 @@
 // we can test our fallback-to-GL code.
 #define SIMULATE_VULKAN_FAILURE 0
 
-#include "ext/glslang/SPIRV/GlslangToSpv.h"
 
 #ifdef USE_CRT_DBG
 #define new DBG_NEW
@@ -1500,35 +1499,10 @@ bool VulkanContext::CreateShaderModule(const std::vector<uint32_t> &spirv, VkSha
 	}
 }
 
-EShLanguage FindLanguage(const VkShaderStageFlagBits shader_type) {
-	switch (shader_type) {
-	case VK_SHADER_STAGE_VERTEX_BIT:
-		return EShLangVertex;
-
-	case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
-		return EShLangTessControl;
-
-	case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
-		return EShLangTessEvaluation;
-
-	case VK_SHADER_STAGE_GEOMETRY_BIT:
-		return EShLangGeometry;
-
-	case VK_SHADER_STAGE_FRAGMENT_BIT:
-		return EShLangFragment;
-
-	case VK_SHADER_STAGE_COMPUTE_BIT:
-		return EShLangCompute;
-
-	default:
-		return EShLangVertex;
-	}
-}
-
 // Compile a given string containing GLSL into SPV for use by VK
 // Return value of false means an error was encountered.
-// Bump when glslang or its options change, so that nothing it compiled differently is used.
-static const uint32_t SPIRV_CACHE_VERSION = 2;
+// Bump when the shader bank format or specialization rules change.
+static const uint32_t SPIRV_CACHE_VERSION = 3;
 static const uint32_t SPIRV_CACHE_MAGIC = 0x43565053;  // "SPVC"
 static const uint32_t SPIRV_MAGIC = 0x07230203;
 
@@ -1775,85 +1749,8 @@ bool GLSLtoSPV(const VkShaderStageFlagBits shader_type, const char *sourceCode, 
 		return true;
 	}
 
-	glslang::TProgram program;
-	const char *shaderStrings[1];
-	TBuiltInResource Resources{};
-	InitShaderResources(Resources);
-
-	int defaultVersion = 0;
-	EShMessages messages;
-	EProfile profile;
-
-	switch (variant) {
-	case GLSLVariant::VULKAN:
-		// Enable SPIR-V and Vulkan rules when parsing GLSL
-		messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
-		defaultVersion = 450;
-		profile = ECoreProfile;
-		break;
-	case GLSLVariant::GL140:
-		messages = (EShMessages)(EShMsgDefault);
-		defaultVersion = 140;
-		profile = ECompatibilityProfile;
-		break;
-	case GLSLVariant::GLES300:
-		messages = (EShMessages)(EShMsgDefault);
-		defaultVersion = 300;
-		profile = EEsProfile;
-		break;
-	default:
-		return false;
-	}
-
-	EShLanguage stage = FindLanguage(shader_type);
-	glslang::TShader shader(stage);
-
-	shaderStrings[0] = sourceCode;
-	shader.setStrings(shaderStrings, 1);
-
-	if (!shader.parse(&Resources, defaultVersion, profile, false, true, messages)) {
-		puts(shader.getInfoLog());
-		puts(shader.getInfoDebugLog());
-		if (errorMessage) {
-			*errorMessage = shader.getInfoLog();
-			(*errorMessage) += shader.getInfoDebugLog();
-		}
-		return false; // something didn't work
-	}
-
-	// TODO: Propagate warnings into errorMessages even if we succeeded here.
-
-	// Note that program does not take ownership of &shader, so this is fine.
-	program.addShader(&shader);
-
-	if (!program.link(messages)) {
-		puts(shader.getInfoLog());
-		puts(shader.getInfoDebugLog());
-		if (errorMessage) {
-			*errorMessage = shader.getInfoLog();
-			(*errorMessage) += shader.getInfoDebugLog();
-		}
-		return false;
-	}
-
-	// Can't fail, parsing worked, "linking" worked.
-	glslang::SpvOptions options;
-	options.disableOptimizer = false;
-	options.optimizeSize = false;
-	options.generateDebugInfo = false;
-	glslang::GlslangToSpv(*program.getIntermediate(stage), spirv, &options);
-	if (cache && !spirv.empty()) {
-		cache->Insert(shader_type, variant, sourceCode, spirv);
-	}
-	return true;
-}
-
-void init_glslang() {
-	glslang::InitializeProcess();
-}
-
-void finalize_glslang() {
-	glslang::FinalizeProcess();
+	*errorMessage = "Shader is not in the precompiled Vulkan bank. Custom texture shaders require an offline .spv sidecar.";
+	return false;
 }
 
 // NOTE: Every vector in the class has to be listed both here and in PerformDeletes. If one is missing

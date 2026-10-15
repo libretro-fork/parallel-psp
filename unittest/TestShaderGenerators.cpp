@@ -1,7 +1,15 @@
 #include "ppsspp_config.h"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#if !PPSSPP_PLATFORM(WINDOWS)
+#include <unistd.h>
+#include <sys/wait.h>
+#include <cerrno>
+#endif
 
 #include "Common/StringUtils.h"
+#include "Common/File/FileUtil.h"
 
 #include "GPU/Common/ShaderId.h"
 #include "GPU/Common/ShaderCommon.h"
@@ -93,17 +101,71 @@ bool GenerateVShader(VShaderID id, char *buffer, ShaderLanguage lang, Draw::Bugs
 	}
 }
 
-static VkShaderStageFlagBits StageToVulkan(ShaderStage stage) {
-	switch (stage) {
-	case ShaderStage::Vertex: return VK_SHADER_STAGE_VERTEX_BIT;
-	case ShaderStage::Compute: return VK_SHADER_STAGE_COMPUTE_BIT;
-	case ShaderStage::Fragment: return VK_SHADER_STAGE_FRAGMENT_BIT;
+// Shader syntax checks use a development tool, never a compiler linked into
+// the core. Bank routing and specialization are tested independently.
+static bool ValidateGLSL(const char *source, ShaderLanguage language, ShaderStage stage, std::string *error) {
+	const char *stageName = stage == ShaderStage::Vertex ? "vert" : stage == ShaderStage::Fragment ? "frag" : "comp";
+	bool vulkan = language == GLSL_VULKAN;
+	int result = -1;
+#if PPSSPP_PLATFORM(WINDOWS)
+	wchar_t directory[MAX_PATH], filename[MAX_PATH];
+	if (!GetTempPathW(MAX_PATH, directory) || !GetTempFileNameW(directory, L"psp", 0, filename)) {
+		*error = "Cannot create temporary shader file";
+		return false;
 	}
-	return VK_SHADER_STAGE_FRAGMENT_BIT;
+	bool written = File::WriteStringToFile(false, source, Path(std::wstring(filename)));
+#else
+	char filename[] = "/tmp/ppsspp-shader-XXXXXX";
+	int fd = mkstemp(filename);
+	bool written = false;
+	if (fd >= 0) {
+		close(fd);
+		written = File::WriteStringToFile(false, source, Path(filename));
+	}
+#endif
+	if (written) {
+#if PPSSPP_PLATFORM(WINDOWS)
+		const wchar_t *wideStage = stage == ShaderStage::Vertex ? L"vert" : stage == ShaderStage::Fragment ? L"frag" : L"comp";
+		std::wstring output = std::wstring(filename) + L".spv";
+		std::wstring command = L"glslangValidator.exe ";
+		if (vulkan) command += L"-V -o \"" + output + L"\" ";
+		command += std::wstring(L"-S ") + wideStage + L" \"" + filename + L"\"";
+		STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+		PROCESS_INFORMATION process{};
+		if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+			WaitForSingleObject(process.hProcess, INFINITE);
+			DWORD exitCode;
+			if (GetExitCodeProcess(process.hProcess, &exitCode)) result = (int)exitCode;
+			CloseHandle(process.hThread); CloseHandle(process.hProcess);
+		}
+		DeleteFileW(output.c_str());
+#else
+		std::string output = std::string(filename) + ".spv";
+		pid_t child = fork();
+		if (child == 0) {
+			if (vulkan) execlp("glslangValidator", "glslangValidator", "-V", "-S", stageName, "-o", output.c_str(), filename, (char *)nullptr);
+			else execlp("glslangValidator", "glslangValidator", "-S", stageName, filename, (char *)nullptr);
+			_exit(127);
+		}
+		if (child > 0) {
+			int status;
+			pid_t waited;
+			do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+			if (waited == child && WIFEXITED(status)) result = WEXITSTATUS(status);
+		}
+		unlink(output.c_str());
+#endif
+	}
+#if PPSSPP_PLATFORM(WINDOWS)
+	DeleteFileW(filename);
+#else
+	unlink(filename);
+#endif
+	if (result != 0) *error = "GLSL validation failed (glslangValidator must be available on PATH for unit tests)";
+	return result == 0;
 }
 
 bool TestCompileShader(const char *buffer, ShaderLanguage lang, ShaderStage stage, std::string *errorMessage) {
-	std::vector<uint32_t> spirv;
 	switch (lang) {
 #if PPSSPP_PLATFORM(WINDOWS)
 	case ShaderLanguage::HLSL_D3D9:
@@ -126,11 +188,9 @@ bool TestCompileShader(const char *buffer, ShaderLanguage lang, ShaderStage stag
 #endif
 
 	case ShaderLanguage::GLSL_VULKAN:
-		return GLSLtoSPV(StageToVulkan(stage), buffer, GLSLVariant::VULKAN, spirv, errorMessage);
 	case ShaderLanguage::GLSL_1xx:
-		return GLSLtoSPV(StageToVulkan(stage), buffer, GLSLVariant::GL140, spirv, errorMessage);
 	case ShaderLanguage::GLSL_3xx:
-		return GLSLtoSPV(StageToVulkan(stage), buffer, GLSLVariant::GLES300, spirv, errorMessage);
+		return ValidateGLSL(buffer, lang, stage, errorMessage);
 	default:
 		*errorMessage = "Unknown shader language";
 		return false;
@@ -516,9 +576,7 @@ bool TestFragmentShaders() {
 bool TestShaderGenerators() {
 #if PPSSPP_PLATFORM(WINDOWS)
 	LoadD3D11();
-	init_glslang();
 #else
-	init_glslang();
 #endif
 
 	if (!TestStencilShaders()) {

@@ -18,8 +18,6 @@ INCFLAGS += \
 	-I$(EXTDIR)/libadrenotools/lib/linkernsbypass \
 	-I$(EXTDIR)/libadrenotools/include \
 	-I$(EXTDIR)/OpenXR-SDK/include \
-	-I$(EXTDIR)/glslang \
-	-I$(EXTDIR)/glslang-build \
 	-I$(EXTDIR)/native \
 	-I$(EXTDIR)/cpu_features/include \
 	-I$(EXTDIR)/snappy \
@@ -278,57 +276,17 @@ SOURCES_CXX += \
 	$(GPUDIR)/GLES/FramebufferManagerGLES.cpp \
 	$(GPUDIR)/GLES/TextureCacheGLES.cpp \
 	$(GPUDIR)/GLES/ShaderManagerGLES.cpp \
-	$(GPUDIR)/GLES/StateMappingGLES.cpp \
-	$(EXTDIR)/glslang/OGLCompilersDLL/InitializeDll.cpp \
-	$(EXTDIR)/glslang/glslang/GenericCodeGen/CodeGen.cpp \
-	$(EXTDIR)/glslang/glslang/GenericCodeGen/Link.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/preprocessor/Pp.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/preprocessor/PpAtom.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/preprocessor/PpContext.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/preprocessor/PpScanner.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/preprocessor/PpTokens.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/attribute.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/Constant.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/InfoSink.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/Initialize.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/Intermediate.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/IntermTraverse.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/ParseContextBase.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/ParseHelper.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/PoolAlloc.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/RemoveTree.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/Scan.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/ShaderLang.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/SymbolTable.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/Versions.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/glslang_tab.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/intermOut.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/iomapper.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/limits.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/linkValidate.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/parseConst.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/propagateNoContraction.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/reflection.cpp \
-	$(EXTDIR)/glslang/glslang/MachineIndependent/SpirvIntrinsics.cpp \
-	$(EXTDIR)/glslang/SPIRV/InReadableOrder.cpp \
-	$(EXTDIR)/glslang/SPIRV/GlslangToSpv.cpp \
-	$(EXTDIR)/glslang/SPIRV/Logger.cpp \
-	$(EXTDIR)/glslang/SPIRV/SpvBuilder.cpp \
-	$(EXTDIR)/glslang/SPIRV/SpvPostProcess.cpp
+	$(GPUDIR)/GLES/StateMappingGLES.cpp
 
 ifeq ($(PLATFORM_EXT), win32)
-SOURCES_CXX += $(COMMONDIR)/MemArenaWin32.cpp \
-	       $(EXTDIR)/glslang/glslang/OSDependent/Windows/ossource.cpp
+SOURCES_CXX += $(COMMONDIR)/MemArenaWin32.cpp
 else ifeq ($(PLATFORM_EXT), darwin)
-SOURCES_CXX += $(COMMONDIR)/MemArenaDarwin.cpp \
-	       $(EXTDIR)/glslang/glslang/OSDependent/Unix/ossource.cpp
+SOURCES_CXX += $(COMMONDIR)/MemArenaDarwin.cpp
 else ifeq ($(PLATFORM_EXT), android)
-SOURCES_CXX += $(COMMONDIR)/MemArenaAndroid.cpp \
-	       $(EXTDIR)/glslang/glslang/OSDependent/Unix/ossource.cpp
+SOURCES_CXX += $(COMMONDIR)/MemArenaAndroid.cpp
 else
 COREFLAGS += -DVK_USE_PLATFORM_XLIB_KHR
-SOURCES_CXX += $(COMMONDIR)/MemArenaPosix.cpp \
-	       $(EXTDIR)/glslang/glslang/OSDependent/Unix/ossource.cpp
+SOURCES_CXX += $(COMMONDIR)/MemArenaPosix.cpp
 endif
 
 

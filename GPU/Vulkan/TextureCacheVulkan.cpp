@@ -33,6 +33,7 @@
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanImage.h"
 #include "Common/GPU/Vulkan/VulkanMemory.h"
+#include "Common/GPU/Vulkan/BuiltinVulkanShaders.h"
 
 #include "Core/Config.h"
 
@@ -50,6 +51,31 @@
 #include "GPU/Vulkan/DrawEngineVulkan.h"
 
 using namespace PPSSPP_VK;
+
+static VkShaderModule LoadTextureShaderModule(VulkanContext *vulkan, const Path &path, const char *source, std::string *error) {
+	std::vector<uint32_t> words;
+	if (!LookupBuiltinVulkanShader(VK_SHADER_STAGE_COMPUTE_BIT, source, words)) {
+		size_t size = 0;
+		Path binary(path.ToString() + ".spv");
+		std::unique_ptr<uint8_t[]> data(g_VFS.ReadFile(binary.c_str(), &size));
+		if (!data || size < 20 || size % 4 != 0) {
+			*error = "Custom texture shader requires an offline SPIR-V sidecar: " + binary.ToString();
+			ERROR_LOG(Log::G3D, "%s", error->c_str());
+			return VK_NULL_HANDLE;
+		}
+		words.resize(size / 4);
+		memcpy(words.data(), data.get(), size);
+		if (words[0] != 0x07230203) {
+			*error = "Invalid texture shader SPIR-V header: " + binary.ToString();
+			return VK_NULL_HANDLE;
+		}
+	}
+	VkShaderModule module = VK_NULL_HANDLE;
+	if (!vulkan->CreateShaderModule(words, &module, "texture_scaler")) {
+		*error = "Failed to create precompiled texture shader";
+	}
+	return module;
+}
 
 #define TEXCACHE_MIN_SLAB_SIZE (8 * 1024 * 1024)
 #define TEXCACHE_MAX_SLAB_SIZE (32 * 1024 * 1024)
@@ -344,7 +370,7 @@ bool TextureCacheVulkan::CompileMultipassShader(VulkanContext *vulkan, const Tex
 			return false;
 		}
 
-		VkShaderModule shader = CompileShaderModule(vulkan, VK_SHADER_STAGE_COMPUTE_BIT, shaderSource.c_str(), error);
+		VkShaderModule shader = LoadTextureShaderModule(vulkan, shaderFile, shaderSource.c_str(), error);
 		if (shader == VK_NULL_HANDLE) {
 			ClearScalingShaders(vulkan);
 			return false;
@@ -396,8 +422,7 @@ void TextureCacheVulkan::CompileScalingShader() {
 	} else {
 		std::string shaderSource = ReadShaderSrc(shaderInfo->computeShaderFiles[0]);
 		std::string fullUploadShader = StringFromFormat(uploadShader, shaderSource.c_str());
-		singlePassCS_ = CompileShaderModule(vulkan, VK_SHADER_STAGE_COMPUTE_BIT, fullUploadShader.c_str(), &error);
-		_dbg_assert_msg_(singlePassCS_ != VK_NULL_HANDLE, "failed to compile upload shader");
+		singlePassCS_ = LoadTextureShaderModule(vulkan, shaderInfo->computeShaderFiles[0], fullUploadShader.c_str(), &error);
 		if (singlePassCS_ == VK_NULL_HANDLE)
 			return;
 		textureScalePipeline_ = TextureScalePipelineType::SINGLE_PASS;

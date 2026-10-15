@@ -2805,6 +2805,8 @@ bool TestShaderGenerators();
 bool TestBuiltinVulkanShaders();
 bool TestBuiltinTextureShaders();
 bool TestBuiltinDepalShaders();
+bool TestBuiltinGameVertexShaders();
+bool TestBuiltinGameFragmentShaders();
 bool TestD3D11Readback();
 bool TestD3D9Readback();
 bool TestGLReadback();
@@ -3029,6 +3031,8 @@ TestItem availableTests[] = {
 	TEST_ITEM(BuiltinVulkanShaders),
 	TEST_ITEM(BuiltinTextureShaders),
 	TEST_ITEM(BuiltinDepalShaders),
+	TEST_ITEM(BuiltinGameVertexShaders),
+	TEST_ITEM(BuiltinGameFragmentShaders),
 	TEST_ITEM(D3D11Readback),
 	TEST_ITEM(D3D9Readback),
 	TEST_ITEM(GLReadback),

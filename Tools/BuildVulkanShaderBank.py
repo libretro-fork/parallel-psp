@@ -8,6 +8,7 @@ Shipped texture-scaling shaders are compiled from defaultshaders.ini.
 """
 import argparse
 import configparser
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import re
 import struct
 import subprocess
 import tempfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "Common/GPU/Vulkan/BuiltinShaders.inl"
@@ -40,7 +42,15 @@ def dump_source():
     draw2d = between(draw2d, "static const InputDef inputs[2]", "template <typename T>")
     depal = (ROOT / "GPU/Common/DepalettizeShaderCommon.cpp").read_text(encoding="utf-8")
     depal = between(depal, "static const InputDef vsInputs[2]", "// Uses integer instructions available")
+    stencil = (ROOT / "GPU/Common/StencilCommon.cpp").read_text(encoding="utf-8")
+    stencil = between(stencil, "// TODO: Merge this with UniformBufferDesc", "bool FramebufferManagerCommon::PerformWriteStencilFromMemory")
+    reinterpret = (ROOT / "GPU/Common/ReinterpretFramebuffer.cpp").read_text(encoding="utf-8")
+    reinterpret = reinterpret[reinterpret.index("static const VaryingDef varyings[1]"):]
     uniforms = between(draw2d, "const UniformDef g_draw2Duniforms[2]", "struct Draw2DUB")
+    base = (ROOT / "GPU/Common/ShaderUniforms.h").read_text(encoding="utf-8")
+    base = between(base, "static const char * const ub_baseStr", "// 512 bytes.")
+    light = (ROOT / "GPU/Common/ShaderUniforms.h").read_text(encoding="utf-8")
+    light = between(light, "static const char * const ub_vs_lightsStr", "// useBufferedRendering")
     return r'''#include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -48,6 +58,9 @@ def dump_source():
 #include "Common/GPU/ShaderWriter.h"
 #include "GPU/Common/Draw2D.h"
 #include "GPU/Common/DepalettizeShaderCommon.h"
+#include "GPU/Vulkan/SoftwareVertexShader.h"
+#include "GPU/Vulkan/HardwareVertexShader.h"
+#include "GPU/Vulkan/GameFragmentShader.h"
 using namespace Draw;
 static std::string directory;
 static void Emit(const std::string &name, const char *code) {
@@ -56,8 +69,8 @@ static void Emit(const std::string &name, const char *code) {
  if (fputs(code, f) < 0 || fclose(f) != 0) std::abort();
 }
 bool HandleAssert(bool, const char *, const char *, int, const char *, const char *, ...) { std::abort(); }
-namespace Presets {
-''' + presets + "}\nnamespace Draw2DBuiltins {\n" + draw2d + "}\n" + uniforms + "namespace DepalBuiltins {\n" + depal + r'''}
+''' + base + light + r'''namespace Presets {
+''' + presets + "}\nnamespace Draw2DBuiltins {\n" + draw2d + "}\n" + uniforms + "namespace DepalBuiltins {\n" + depal + "}\nnamespace StencilBuiltins {\n" + stencil + "}\nnamespace ReinterpretBuiltins {\n" + reinterpret + r'''}
 int main(int argc, char **argv) {
  if (argc != 2) return 2;
  directory = argv[1];
@@ -65,7 +78,49 @@ int main(int argc, char **argv) {
   for (bool tint : {false, true}) Presets::GenerateVShader((VertexShaderPreset)i, tint);
  for (int i = 0; i < FS_MAX_PRESET; ++i) Presets::GenerateFShader((FragmentShaderPreset)i);
  ShaderLanguageDesc language(GLSL_VULKAN);
- char code[16384];
+ char code[32768];
+ StencilBuiltins::GenerateStencilVs(code, language);
+ Emit("stencil.vert", code);
+ for (int variant = 0; variant < 4; ++variant) {
+  Bugs bugs;
+  if (variant & 1) bugs.Infest(Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL_MALI);
+  StencilBuiltins::GenerateStencilFs(code, language, bugs, variant & 2);
+  Emit("stencil_" + std::to_string(variant) + ".frag", code);
+ }
+ for (int from = 0; from < 4; ++from)
+ for (int to = 0; to < 4; ++to)
+ for (int stereo = 0; stereo < 2; ++stereo) {
+  if (from == to) continue;
+  ShaderWriter writer(code, language, ShaderStage::Fragment, Slice<const char *>::empty(),
+    stereo ? ShaderWriterFlags::FS_AUTO_STEREO : ShaderWriterFlags::NONE);
+  ReinterpretBuiltins::GenerateReinterpretFragmentShader(writer, (GEBufferFormat)from, (GEBufferFormat)to);
+  Emit("reinterpret_" + std::to_string(from) + "_" + std::to_string(to) + "_" + std::to_string(stereo) + ".frag", code);
+ }
+ for (int textureKind = 0; textureKind < 4; ++textureKind)
+ for (int palette = 0; palette < 2; ++palette) {
+  if (palette && (textureKind == 0 || textureKind == 2)) continue;
+  for (int variant = 0; variant < 16; ++variant)
+  for (int depth = 0; depth < 3; ++depth) {
+   bool stereo = (variant & 4) != 0;
+   ShaderWriter writer(code, language, ShaderStage::Fragment, Slice<const char *>::empty(),
+     stereo ? ShaderWriterFlags::FS_AUTO_STEREO : ShaderWriterFlags::NONE);
+   WriteGameVulkanFragmentShader(writer, ub_baseStr, textureKind, palette, variant & 1,
+     variant & 2, stereo, variant & 8, depth, 0, 0, 0);
+   Emit("game_" + std::to_string(textureKind) + "_" + std::to_string(palette) + "_" + std::to_string(variant) + "_" + std::to_string(depth) + ".frag", code);
+  }
+ }
+ for (int variant = 0; variant < 16; ++variant) {
+  std::vector<const char *> extensions;
+  if (variant & 8) extensions.push_back("#extension GL_EXT_multiview : enable");
+  ShaderWriter writer(code, language, ShaderStage::Vertex, extensions);
+  WriteHardwareVulkanVertexShader(writer, ub_baseStr, ub_vs_lightsStr, variant & 1, variant & 2, variant & 4, variant & 8, 0, 0, 0, 0);
+  Emit("hardware_" + std::to_string(variant) + ".vert", code);
+ }
+ for (int variant = 0; variant < 16; ++variant) {
+  ShaderWriter writer(code, language, ShaderStage::Vertex);
+  WriteSoftwareVulkanVertexShader(writer, ub_baseStr, variant & 1, variant & 2, variant & 4, variant & 8, 0);
+  Emit("software_" + std::to_string(variant) + ".vert", code);
+ }
  {
   ShaderWriter writer(code, language, ShaderStage::Vertex);
   Draw2DBuiltins::GenerateDraw2DVS(writer);
@@ -161,14 +216,13 @@ def specialization_words(words):
 
 
 def generate(args):
-    with tempfile.TemporaryDirectory(prefix="psp-vulkan-shaders-") as folder:
+    if args.work_dir:
+        Path(args.work_dir).mkdir(parents=True, exist_ok=True)
+    with (contextlib.nullcontext(args.work_dir) if args.work_dir else tempfile.TemporaryDirectory(prefix="psp-vulkan-shaders-")) as folder:
         tmp = Path(folder)
         (tmp / "dump.cpp").write_text(dump_source(), encoding="utf-8")
-        # Shader language descriptions are shared with the runtime, but the
-        # compiler resource-limit function is not needed by this host tool.
+        # Use the runtime's shader language descriptions in the host generator.
         desc = (ROOT / "Common/GPU/Shader.cpp").read_text(encoding="utf-8")
-        desc = desc[:desc.index("void InitShaderResources")]
-        desc = desc.replace('#include "ext/glslang/SPIRV/GlslangToSpv.h"', "")
         (tmp / "ShaderLanguage.cpp").write_text("#include <cstring>\n" + desc, encoding="utf-8")
         exe = tmp / ("dump.exe" if os.name == "nt" else "dump")
         run(args.cxx, "-std=c++17", "-O2", "-ffunction-sections", "-fdata-sections",
@@ -188,17 +242,26 @@ def generate(args):
             if key in entries:
                 continue
             binary = tmp / "shader.spv"
-            run(args.glslc, "--target-env=vulkan1.0", "-O", source, "-o", binary)
-            run(args.spirv_val, "--target-env", "vulkan1.0", binary)
+            # Keep game arithmetic aligned with the runtime glslang path. An
+            # additional offline optimization pass changes depth rounding near
+            # quantization boundaries even when the GLSL equations are equal.
+            optimization = "-O0" if source.name.startswith(("software_", "hardware_", "game_")) else "-O"
+            run(args.glslc, "--target-env=vulkan1.0", optimization, source, "-o", binary)
+            try:
+                run(args.spirv_val, "--target-env", "vulkan1.0", binary)
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError("Invalid SPIR-V generated for " + source.name) from error
             data = binary.read_bytes()
             words = struct.unpack("<%dI" % (len(data) // 4), data)
             entries[key] = (words, specialization_words(words))
         lines = ["// Generated by Tools/BuildVulkanShaderBank.py. Do not edit.",
                  "// Sources retain their original license notices embedded below.", ""]
         for i, ((stage, source), (words, specs)) in enumerate(entries.items()):
-            lines.append("static const uint32_t builtin_%d[] = {" % i)
-            for j in range(0, len(words), 8):
-                lines.append("\t" + ", ".join("0x%08x" % w for w in words[j:j+8]) + ",")
+            raw = struct.pack("<%dI" % len(words), *words)
+            compressed = zlib.compress(raw, level=9, wbits=-15)
+            lines.append("static const uint8_t builtin_%d[] = {" % i)
+            for j in range(0, len(compressed), 16):
+                lines.append("\t" + ", ".join("0x%02x" % b for b in compressed[j:j+16]) + ",")
             lines.append("};")
             if specs:
                 lines.append("static const BuiltinSpecialization builtin_specs_%d[] = {" % i)
@@ -210,7 +273,7 @@ def generate(args):
             literal = "\n".join("\t" + json.dumps(source[k:k+2048], ensure_ascii=True)
                                 for k in range(0, len(source), 2048))
             spec_array = "builtin_specs_%d" % i if specs else "nullptr"
-            lines.append("{ %d,\n%s,\n builtin_%d, %d, %s, %d }," % (stage, literal, i, len(words), spec_array, len(specs)))
+            lines.append("{ %d,\n%s,\n builtin_%d, sizeof(builtin_%d), %d, %s, %d }," % (stage, literal, i, i, len(words), spec_array, len(specs)))
         lines.append("};\n")
         result = "\n".join(lines).encode()
         if args.check:
@@ -227,4 +290,5 @@ if __name__ == "__main__":
     parser.add_argument("--glslc", default="glslc")
     parser.add_argument("--spirv-val", default="spirv-val")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--work-dir", help="Keep generated sources for diagnosis")
     generate(parser.parse_args())

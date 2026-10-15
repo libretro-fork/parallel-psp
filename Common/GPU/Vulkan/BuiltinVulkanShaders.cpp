@@ -4,6 +4,7 @@
 #include <string>
 #include <limits>
 #include <utility>
+#include <encodings/deflate.h>
 #include "Common/GPU/Vulkan/BuiltinVulkanShaders.h"
 
 namespace {
@@ -14,7 +15,8 @@ struct BuiltinSpecialization {
 struct BuiltinShader {
 	uint32_t stage;
 	const char *source;
-	const uint32_t *words;
+	const uint8_t *compressed;
+	size_t compressedSize;
 	size_t count;
 	const BuiltinSpecialization *specializations;
 	size_t specializationCount;
@@ -93,7 +95,27 @@ bool LookupBuiltinVulkanShader(uint32_t stage, const char *source, std::vector<u
 	}
 	for (const auto &shader : builtinShaders) {
 		if (shader.stage != stage || !SameSource(shader.source, source)) continue;
-		std::vector<uint32_t> specialized(shader.words, shader.words + shader.count);
+		// One spare word lets the decoder consume the final block marker even
+		// when its last output byte exactly fills the expected shader size.
+		std::vector<uint32_t> specialized(shader.count + 1);
+		void *decoder = rinflate_new(-15);
+		if (!decoder) {
+			return false;
+		}
+		rinflate_set_in(decoder, shader.compressed, shader.compressedSize);
+		rinflate_set_out(decoder, (uint8_t *)specialized.data(), specialized.size() * sizeof(uint32_t));
+		size_t read = 0, wrote = 0;
+		int result = rinflate_process(decoder, &read, &wrote);
+		rinflate_free(decoder);
+		if (result != RDEFLATE_PROCESS_END || read != shader.compressedSize || wrote != shader.count * sizeof(uint32_t)) {
+			return false;
+		}
+		specialized.resize(shader.count);
+		if (!specialized.empty() && specialized[0] == 0x03022307) {
+			for (uint32_t &word : specialized) {
+				word = (word >> 24) | ((word >> 8) & 0xff00) | ((word << 8) & 0xff0000) | (word << 24);
+			}
+		}
 		for (size_t i = 0; i < shader.specializationCount; ++i) {
 			const auto &spec = shader.specializations[i];
 			bool found = false;

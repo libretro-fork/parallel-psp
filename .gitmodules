@@ -4,9 +4,6 @@
 [submodule "ext/armips"]
 	path = ext/armips
 	url = https://github.com/Kingcom/armips.git
-[submodule "ext/glslang"]
-	path = ext/glslang
-	url = https://github.com/hrydgard/glslang.git
 [submodule "ppsspp-debugger"]
 	path = assets/debugger
 	url = https://github.com/unknownbrackets/ppsspp-debugger.git

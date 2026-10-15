@@ -227,8 +227,6 @@ if(USE_NO_MMAP)
 	add_compile_definitions(NO_MMAP MASKED_PSP_MEMORY)
 endif()
 
-# Work around for some misfeature of the current glslang build system
-include_directories(ext/glslang)
 
 # Not sure if this is the best way - what about system glew?
 # Anyway, glew will be going away anyway.
@@ -375,13 +373,6 @@ if(NOT MSVC)
 		add_compile_options("$<$<CONFIG:Debug>:-fsanitize=undefined>")
 		add_link_options("$<$<CONFIG:Debug>:-fsanitize=undefined>")
 
-		# UBSAN is a collection of sanitizers, including vtpr, which reqiuires RTTI.
-		# ext/glslang disables RTTI by default using the `ENABLE_RTTI` option.
-		# If RTTI is disabled, we must also disable the vtpr sanitizer.
-		if(NOT ENABLE_RTTI)
-			add_compile_options("$<$<CONFIG:Debug>:-fno-sanitize=vptr>")
-			add_link_options("$<$<CONFIG:Debug>:-fno-sanitize=vptr>")
-		endif()
 	endif()
 
 	include(CheckSymbolExists)
@@ -552,13 +543,6 @@ set(ATOMIC_LIB)
 if(ANDROID OR (LINUX AND ARM_DEVICE) OR (LINUX AND RISCV64) OR (LINUX AND LOONGARCH64))
 	set(ATOMIC_LIB atomic)
 endif()
-
-set(GlslangLibs glslang OGLCompiler OSDependent SPIRV)
-
-if (ENABLE_SPVREMAPPER)
-	list(APPEND GlslangLibs SPVRemapper)
-endif()
-
 
 add_subdirectory(Common)
 

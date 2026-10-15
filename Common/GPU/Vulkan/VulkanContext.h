@@ -590,10 +590,6 @@ private:
 	VmaAllocator allocator_ = VK_NULL_HANDLE;
 };
 
-// GLSL compiler
-void init_glslang();
-void finalize_glslang();
-
 enum class GLSLVariant {
 	VULKAN,
 	GL140,
@@ -601,7 +597,7 @@ enum class GLSLVariant {
 };
 
 // Compiled SPIR-V, keyed on the GLSL source, stage and variant, so that a shader compiled in an earlier
-// run doesn't have to go through glslang again.
+// run can reuse the specialized shader binary.
 //
 // Lookup and Insert are lock-free and can run on any thread. Lookups read a published table; inserts
 // queue up and join the table at the next Write or SaveIfDirty. The other calls are for one thread
@@ -667,7 +663,7 @@ private:
 // the game's shader cache.
 extern SPIRVCache g_spirvCache;
 
-// With a cache, a shader found there skips glslang, and a newly compiled one is added to it.
+// Resolves checked-in shader programs and patches their specialization defaults. No compiler is linked.
 bool GLSLtoSPV(const VkShaderStageFlagBits shader_type, const char *sourceCode, GLSLVariant variant, std::vector<uint32_t> &spirv, std::string *errorMessage, SPIRVCache *cache = nullptr);
 
 const char *VulkanColorSpaceToString(VkColorSpaceKHR colorSpace);

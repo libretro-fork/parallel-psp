@@ -27,6 +27,8 @@
 #include "GPU/Common/ShaderUniforms.h"
 #include "GPU/Common/VertexShaderGenerator.h"
 #include "GPU/Vulkan/DrawEngineVulkan.h"
+#include "GPU/Vulkan/SoftwareVertexShader.h"
+#include "GPU/Vulkan/HardwareVertexShader.h"
 
 #undef WRITE
 
@@ -63,7 +65,7 @@
 // TODO: Skip all this if we can actually get a 16-bit depth buffer along with stencil, which
 // is a bit of a rare configuration, although quite common on mobile.
 
-bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguageDesc &compat, Draw::Bugs bugs, uint32_t *attrMask, uint64_t *uniformMask, VertexShaderFlags *vertexShaderFlags, std::string *errorString) {
+bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguageDesc &compat, Draw::Bugs bugs, uint32_t *attrMask, uint64_t *uniformMask, VertexShaderFlags *vertexShaderFlags, std::string *errorString, bool precompiledVulkan) {
 	*attrMask = 0;
 	*uniformMask = 0;
 	*vertexShaderFlags = (VertexShaderFlags)0;
@@ -104,6 +106,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 			*errorString = "Multiview only supported with Vulkan for now";
 			return false;
 		}
+		*vertexShaderFlags |= VertexShaderFlags::MULTI_VIEW;
 		extensions.push_back("#extension GL_EXT_multiview : enable");
 	}
 
@@ -536,7 +539,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 			if (PSP_CoreParameter().compat.vrCompat().UnitsPerMeter > 0) {
 				scale = PSP_CoreParameter().compat.vrCompat().UnitsPerMeter;
 			}
-			WRITE(p, "  viewPos.x += %f * float(gl_ViewIndex * 2 - 1);\n", scale * ipd * 0.5);
+			WRITE(p, "  viewPos.x += %.9g * float(gl_ViewIndex * 2 - 1);\n", scale * ipd * 0.5);
 		}
 
 		// Final view and projection transforms.
@@ -1017,5 +1020,65 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		WRITE(p, "  return Out;\n");
 	}
 	WRITE(p, "}\n");
+	if (precompiledVulkan && compat.shaderLanguage == GLSL_VULKAN && useHWTransform && !gstate_c.Use(GPU_USE_VIRTUAL_REALITY)) {
+		uint32_t features = 0;
+		if (!nanBug && rangeCulling) {
+			features |= 1;
+		}
+		if (gstate_c.Use(GPU_ROUND_DEPTH_TO_16BIT)) {
+			features |= 2;
+		}
+		if (gstate_c.Use(GPU_USE_PRE_ROTATION)) {
+			features |= 4;
+		}
+		if (flipY) {
+			features |= 8;
+		}
+		if (fsDepthClamp) {
+			features |= 16;
+		}
+		if (bugs.Has(Draw::Bugs::MALI_CONSTANT_LOAD_BUG) && g_Config.bVendorBugChecksEnabled) {
+			features |= 64;
+		}
+		uint32_t lights = uint32_t(matUpdate) << 20;
+		for (int i = 0; i < 4; ++i) {
+			lights |= uint32_t(id.Bit(VS_BIT_LIGHT0_ENABLE + i)) << i;
+			lights |= id.Bits(VS_BIT_LIGHT0_COMP + 4 * i, 2) << (4 + 4 * i);
+			lights |= id.Bits(VS_BIT_LIGHT0_TYPE + 4 * i, 2) << (6 + 4 * i);
+		}
+		float scale = PSP_CoreParameter().compat.vrCompat().UnitsPerMeter;
+		if (scale <= 0.0f) {
+			scale = 1.0f;
+		}
+		float eyeOffset = scale * 0.065f * 0.5f;
+		uint32_t eyeBits;
+		memcpy(&eyeBits, &eyeOffset, sizeof(eyeBits));
+		ShaderWriter compiled(buffer, compat, ShaderStage::Vertex, extensions);
+		WriteHardwareVulkanVertexShader(compiled, ub_baseStr, ub_vs_lightsStr, doFlatShading,
+			clipNearPlane, depthCullEnable, useSimpleStereo, uint32_t(id.ToUint64()), features, lights, eyeBits);
+	}
+	if (precompiledVulkan && compat.shaderLanguage == GLSL_VULKAN && !useHWTransform && !gstate_c.Use(GPU_USE_VIRTUAL_REALITY)) {
+		uint32_t swFlags = 0;
+		if (isModeThrough) {
+			swFlags |= SWVS_THROUGH;
+		}
+		if (!nanBug && rangeCulling) {
+			swFlags |= SWVS_RANGE_CULL;
+		}
+		if (gstate_c.Use(GPU_ROUND_DEPTH_TO_16BIT)) {
+			swFlags |= SWVS_ROUND_DEPTH;
+		}
+		if (gstate_c.Use(GPU_USE_PRE_ROTATION)) {
+			swFlags |= SWVS_ROTATION;
+		}
+		if (flipY) {
+			swFlags |= SWVS_FLIP_Y;
+		}
+		if (fsDepthClamp) {
+			swFlags |= SWVS_DEPTH_CLAMP;
+		}
+		ShaderWriter compiled(buffer, compat, ShaderStage::Vertex);
+		WriteSoftwareVulkanVertexShader(compiled, ub_baseStr, texCoordInVec3, lmode, doFlatShading, clipMinMax, swFlags);
+	}
 	return true;
 }

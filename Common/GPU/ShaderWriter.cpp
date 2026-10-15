@@ -12,7 +12,7 @@ const char * const vulkan_glsl_preamble_fs =
 "#extension GL_ARB_shader_image_load_store : enable\n"
 "#define splat3(x) vec3(x)\n"
 "#define DISCARD discard\n"
-"precision lowp float;\n"
+"precision highp float;\n"
 "precision highp int;\n"
 "\n";
 
@@ -261,7 +261,7 @@ void ShaderWriter::BeginVSMain(Slice<InputDef> inputs, Slice<UniformDef> uniform
 		}
 		for (auto &varying : varyings) {
 			F("layout(location = %d) %s out %s %s;  // %s\n",
-				varying.index, varying.precision ? varying.precision : "", varying.type, varying.name, semanticNames[varying.semantic]);
+				varying.index, "highp", varying.type, varying.name, semanticNames[varying.semantic]);
 		}
 		C("void main() {\n");
 		break;
@@ -311,7 +311,7 @@ void ShaderWriter::BeginFSMain(Slice<UniformDef> uniforms, Slice<VaryingDef> var
 		break;
 	case GLSL_VULKAN:
 		for (auto &varying : varyings) {
-			F("layout(location = %d) %s in %s %s;  // %s\n", varying.index, varying.precision ? varying.precision : "", varying.type, varying.name, semanticNames[varying.semantic]);
+			F("layout(location = %d) %s in %s %s;  // %s\n", varying.index, "highp", varying.type, varying.name, semanticNames[varying.semantic]);
 		}
 		C("layout(location = 0, index = 0) out vec4 fragColor0;\n");
 		C("\nvoid main() {\n");
@@ -380,7 +380,11 @@ void ShaderWriter::HighPrecisionFloat() {
 }
 
 void ShaderWriter::LowPrecisionFloat() {
-	if ((ShaderLanguageIsOpenGL(lang_.shaderLanguage) && lang_.gles) || lang_.shaderLanguage == GLSL_VULKAN) {
+	if (lang_.shaderLanguage == GLSL_VULKAN) {
+		// RelaxedPrecision can introduce host half-float rounding unrelated to
+		// the GE's explicit depth, color-test and palette quantization.
+		C("precision highp float;\n");
+	} else if (ShaderLanguageIsOpenGL(lang_.shaderLanguage) && lang_.gles) {
 		C("precision lowp float;\n");
 	}
 }

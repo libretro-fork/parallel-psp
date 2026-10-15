@@ -167,7 +167,6 @@ bool VulkanGraphicsContext::InitAPI(void *wnd, std::string *deviceName, std::str
 		return false;
 	}
 
-	init_glslang();
 
 	g_LogOptions.breakOnError = true;
 	g_LogOptions.breakOnWarning = true;
@@ -292,7 +291,6 @@ void VulkanGraphicsContext::ShutdownAPI() {
 	vulkan_ = nullptr;
 	renderManager_ = nullptr;
 
-	finalize_glslang();
 }
 
 void VulkanGraphicsContext::Resize() {

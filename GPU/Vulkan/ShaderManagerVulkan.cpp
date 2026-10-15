@@ -88,7 +88,7 @@ static Promise<VkShaderModule> *CompileShaderModuleAsync(VulkanContext *vulkan, 
 	};
 
 #if defined(_DEBUG)
-	// Don't parallelize in debug mode, pathological behavior due to mutex locks in allocator which is HEAVILY used by glslang.
+	// Keep debug shader creation synchronous for deterministic diagnostics.
 	bool singleThreaded = true;
 #else
 	bool singleThreaded = false;
@@ -239,7 +239,7 @@ const VulkanVertexShader *ShaderManagerVulkan::GetVertexShaderFromID(VShaderID V
 	uint64_t uniformMask = 0;  // Not used
 	uint32_t attributeMask = 0;  // Not used
 	VertexShaderFlags flags{};
-	bool success = GenerateVertexShader(VSID, codeBuffer_, compat_, draw_->GetBugs(), &attributeMask, &uniformMask, &flags, &genErrorString);
+	bool success = GenerateVertexShader(VSID, codeBuffer_, compat_, draw_->GetBugs(), &attributeMask, &uniformMask, &flags, &genErrorString, true);
 	_assert_msg_(success, "VS gen error: %s", genErrorString.c_str());
 	_assert_msg_(strlen(codeBuffer_) < CODE_BUFFER_SIZE, "VS length error: %d", (int)strlen(codeBuffer_));
 
@@ -259,7 +259,7 @@ const VulkanFragmentShader *ShaderManagerVulkan::GetFragmentShaderFromID(FShader
 	std::string genErrorString;
 	uint64_t uniformMask = 0;  // Not used
 	FragmentShaderFlags flags{};
-	bool success = GenerateFragmentShader(FSID, codeBuffer_, compat_, draw_->GetBugs(), &uniformMask, &flags, &genErrorString);
+	bool success = GenerateFragmentShader(FSID, codeBuffer_, compat_, draw_->GetBugs(), &uniformMask, &flags, &genErrorString, true);
 	_assert_msg_(success, "FS gen error: %s", genErrorString.c_str());
 	_assert_msg_(strlen(codeBuffer_) < CODE_BUFFER_SIZE, "FS length error: %d", (int)strlen(codeBuffer_));
 
@@ -368,7 +368,7 @@ enum class VulkanCacheDetectFlags {
 };
 
 #define CACHE_HEADER_MAGIC 0xff51f420 
-#define CACHE_VERSION 61
+#define CACHE_VERSION 62
 
 struct VulkanCacheHeader {
 	uint32_t magic;
@@ -432,7 +432,7 @@ bool ShaderManagerVulkan::LoadCache(FILE *f) {
 		uint32_t attributeMask = 0;
 		uint64_t uniformMask = 0;
 		VertexShaderFlags flags;
-		if (!GenerateVertexShader(id, codeBuffer_, compat_, draw_->GetBugs(), &attributeMask, &uniformMask, &flags, &genErrorString)) {
+		if (!GenerateVertexShader(id, codeBuffer_, compat_, draw_->GetBugs(), &attributeMask, &uniformMask, &flags, &genErrorString, true)) {
 			ERROR_LOG(Log::G3D, "Failed to generate vertex shader during cache load");
 			// We just ignore this one and carry on.
 			failCount++;
@@ -456,7 +456,7 @@ bool ShaderManagerVulkan::LoadCache(FILE *f) {
 		std::string genErrorString;
 		uint64_t uniformMask = 0;
 		FragmentShaderFlags flags;
-		if (!GenerateFragmentShader(id, codeBuffer_, compat_, draw_->GetBugs(), &uniformMask, &flags, &genErrorString)) {
+		if (!GenerateFragmentShader(id, codeBuffer_, compat_, draw_->GetBugs(), &uniformMask, &flags, &genErrorString, true)) {
 			ERROR_LOG(Log::G3D, "Failed to generate fragment shader during cache load");
 			// We just ignore this one and carry on.
 			failCount++;

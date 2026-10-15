@@ -118,7 +118,6 @@ def main(args):
         tmp = Path(name)
         (tmp / "dump.cpp").write_text(reference_dump(), encoding="utf-8")
         desc = (ROOT / "Common/GPU/Shader.cpp").read_text(encoding="utf-8")
-        desc = desc[:desc.index("void InitShaderResources")].replace('#include "ext/glslang/SPIRV/GlslangToSpv.h"', "")
         (tmp / "ShaderLanguage.cpp").write_text("#include <cstring>\n" + desc, encoding="utf-8")
         run(args.cxx, "-std=c++17", "-O2", "-ffunction-sections", "-fdata-sections", "-DNDEBUG",
             "-I" + str(ROOT), "-I" + str(ROOT / "Common"), "-I" + str(ROOT / "GPU"),

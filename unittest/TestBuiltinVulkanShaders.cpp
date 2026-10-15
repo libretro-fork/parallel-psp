@@ -10,6 +10,11 @@
 #include "Common/File/FileUtil.h"
 #include "Common/StringUtils.h"
 #include <memory>
+#include "GPU/Common/ShaderId.h"
+#include "GPU/Common/VertexShaderGenerator.h"
+#include "GPU/Common/FragmentShaderGenerator.h"
+#include "GPU/Common/ReinterpretFramebuffer.h"
+#include "GPU/Common/StencilCommon.h"
 
 void GenerateDraw2DVS(ShaderWriter &writer);
 Draw2DPipelineInfo GenerateDraw2DCopyColorFs(ShaderWriter &writer);
@@ -160,5 +165,110 @@ bool TestBuiltinDepalShaders() {
 	goodSource.replace(value, end - value, "4294967296");
 	EXPECT_FALSE(LookupBuiltinVulkanShader(VK_SHADER_STAGE_FRAGMENT_BIT, goodSource.c_str(), sentinel));
 	EXPECT_TRUE(sentinel.size() == 1 && sentinel[0] == 0x12345678);
+	return true;
+}
+
+
+static bool CheckFullPrecision(const char *source, uint32_t stage) {
+	std::vector<uint32_t> words;
+	EXPECT_TRUE(LookupBuiltinVulkanShader(stage, source, words));
+	for (size_t pos = 5; pos < words.size();) {
+		uint32_t count = words[pos] >> 16;
+		EXPECT_TRUE(count && count <= words.size() - pos);
+		// OpDecorate RelaxedPrecision would allow unrelated host FP16 rounding.
+		EXPECT_FALSE((words[pos] & 65535) == 71 && count >= 3 && words[pos + 2] == 0);
+		pos += count;
+	}
+	return true;
+}
+
+bool TestBuiltinGameVertexShaders() {
+	struct RestoreUseFlags {
+		uint32_t saved = gstate_c.UseFlags();
+		~RestoreUseFlags() { gstate_c.SetUseFlags(saved); }
+	} restore;
+	ShaderLanguageDesc language(GLSL_VULKAN);
+	char reference[32768], source[32768];
+	uint64_t random = 0x123456789abcdefULL;
+	for (int n = 0; n < 1024; ++n) {
+		random ^= random << 13;
+		random ^= random >> 7;
+		random ^= random << 17;
+		VShaderID id;
+		id.FromUint64(random & ((1ULL << 52) - 1));
+		id.SetBit(VS_BIT_USE_HW_TRANSFORM, n & 1);
+		id.SetBit(VS_BIT_IS_THROUGH, !(n & 1) && (n % 3 == 0));
+		uint32_t useFlags = 0;
+		if (n & 2) useFlags |= GPU_USE_CLIP_DISTANCE;
+		if (n & 4) useFlags |= GPU_USE_CULL_DISTANCE;
+		if (n & 8) useFlags |= GPU_ROUND_DEPTH_TO_16BIT;
+		if (n & 16) useFlags |= GPU_USE_PRE_ROTATION;
+		if (n & 32) useFlags |= GPU_USE_NONBUFFERED_FLIP;
+		gstate_c.SetUseFlags(useFlags);
+		Draw::Bugs bugs;
+		if (n % 7 == 0) bugs.Infest(Draw::Bugs::BROKEN_NAN_IN_CONDITIONAL);
+		if (n % 11 == 0) bugs.Infest(Draw::Bugs::MALI_CONSTANT_LOAD_BUG);
+		if (n % 13 == 0) bugs.Infest(Draw::Bugs::BROKEN_FLAT_IN_SHADER);
+		uint32_t attributes, referenceAttributes;
+		uint64_t uniforms, referenceUniforms;
+		VertexShaderFlags flags, referenceFlags;
+		std::string error;
+		EXPECT_TRUE(GenerateVertexShader(id, reference, language, bugs, &referenceAttributes, &referenceUniforms, &referenceFlags, &error));
+		EXPECT_TRUE(GenerateVertexShader(id, source, language, bugs, &attributes, &uniforms, &flags, &error, true));
+		EXPECT_TRUE(attributes == referenceAttributes && uniforms == referenceUniforms && flags == referenceFlags);
+		EXPECT_TRUE(bool(flags & VertexShaderFlags::MULTI_VIEW) == id.Bit(VS_BIT_SIMPLE_STEREO));
+		RET(CheckBuiltin(VK_SHADER_STAGE_VERTEX_BIT, source));
+		RET(CheckFullPrecision(source, VK_SHADER_STAGE_VERTEX_BIT));
+	}
+	return true;
+}
+
+
+bool TestBuiltinGameFragmentShaders() {
+	struct RestoreUseFlags {
+		uint32_t saved = gstate_c.UseFlags();
+		~RestoreUseFlags() { gstate_c.SetUseFlags(saved); }
+	} restore;
+	ShaderLanguageDesc language(GLSL_VULKAN);
+	char reference[32768], source[32768];
+	uint64_t random = 0xabcdef123456789ULL;
+	int accepted = 0;
+	for (int n = 0; n < 2048; ++n) {
+		random ^= random << 13; random ^= random >> 7; random ^= random << 17;
+		FShaderID id; id.FromUint64(random & ((1ULL << 62) - 1));
+		id.SetBit(FS_BIT_USE_FRAMEBUFFER_FETCH, false);
+		gstate_c.SetUseFlags(n & 1 ? GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT : 0);
+		Draw::Bugs bugs;
+		if (n % 13 == 0) bugs.Infest(Draw::Bugs::BROKEN_FLAT_IN_SHADER);
+		uint64_t uniforms, referenceUniforms;
+		FragmentShaderFlags flags, referenceFlags;
+		std::string error;
+		if (!GenerateFragmentShader(id, reference, language, bugs, &referenceUniforms, &referenceFlags, &error)) continue;
+		EXPECT_TRUE(GenerateFragmentShader(id, source, language, bugs, &uniforms, &flags, &error, true));
+		EXPECT_TRUE(uniforms == referenceUniforms && flags == referenceFlags);
+		RET(CheckBuiltin(VK_SHADER_STAGE_FRAGMENT_BIT, source));
+		RET(CheckFullPrecision(source, VK_SHADER_STAGE_FRAGMENT_BIT));
+		++accepted;
+	}
+	EXPECT_TRUE(accepted > 128);
+	for (int variant = 0; variant < 4; ++variant) {
+		Draw::Bugs bugs;
+		if (variant & 1) bugs.Infest(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL_MALI);
+		GenerateStencilFs(source, language, bugs, variant & 2);
+		RET(CheckBuiltin(VK_SHADER_STAGE_FRAGMENT_BIT, source));
+	}
+	GenerateStencilVs(source, language);
+	RET(CheckBuiltin(VK_SHADER_STAGE_VERTEX_BIT, source));
+	for (int from = 0; from < 4; ++from) {
+		for (int to = 0; to < 4; ++to) {
+			if (from == to) continue;
+			for (int stereo = 0; stereo < 2; ++stereo) {
+				ShaderWriter writer(source, language, ShaderStage::Fragment, Slice<const char *>::empty(),
+					stereo ? ShaderWriterFlags::FS_AUTO_STEREO : ShaderWriterFlags::NONE);
+				GenerateReinterpretFragmentShader(writer, (GEBufferFormat)from, (GEBufferFormat)to);
+				RET(CheckBuiltin(VK_SHADER_STAGE_FRAGMENT_BIT, source));
+			}
+		}
+	}
 	return true;
 }

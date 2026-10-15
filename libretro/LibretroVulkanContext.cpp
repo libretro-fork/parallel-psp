@@ -15,7 +15,6 @@
 #include "libretro/LibretroVulkanPresentation.h"
 #include <libretro_vulkan.h>
 #include <GPU/Vulkan/VulkanRenderManager.h>
-#include "ext/glslang/OGLCompilersDLL/InitializeDll.h"
 
 #undef fflush
 
@@ -38,7 +37,6 @@ void LibretroVulkanContext::SwapBuffers() {
 }
 
 static bool create_device_internal(retro_vulkan_context *context, VkInstance instance, VkPhysicalDevice gpu, VkSurfaceKHR surface, PFN_vkGetInstanceProcAddr get_instance_proc_addr, const char **required_device_extensions, unsigned num_required_device_extensions, const char **required_device_layers, unsigned num_required_device_layers, const VkPhysicalDeviceFeatures *required_features, retro_vulkan_create_device_wrapper_t wrapper = nullptr, void *opaque = nullptr) {
-	init_glslang();
 
 	vk = new VulkanContext();
 
@@ -236,8 +234,6 @@ void LibretroVulkanContext::ShutdownAPI() {
    vk = nullptr;
    hwRenderInterface = nullptr;
 
-   finalize_glslang();
-   glslang::DetachProcess();
 }
 
 void *LibretroVulkanContext::GetAPIContext() { return vk; }

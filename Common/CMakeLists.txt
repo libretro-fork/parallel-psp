@@ -350,5 +350,3 @@ if(WIN32)
 endif()
 
 target_link_libraries(Common basis_universal vma gason udis86 libretro-common ${RT_LIB} ${ATOMIC_LIB})
-
-target_link_libraries(Common ${GlslangLibs})

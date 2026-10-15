@@ -155,3 +155,6 @@ RAPrefs_PPSSPP.cfg
 cmake-build-*/
 
 /.vscode/
+
+# Preserve old local dependency checkouts after removing their gitlinks.
+/ext/glslang/

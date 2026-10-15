@@ -32,6 +32,7 @@
 #include "GPU/Common/FragmentShaderGenerator.h"
 #include "GPU/Directx9/ShaderConstantsDX9.h"
 #include "GPU/Vulkan/DrawEngineVulkan.h"
+#include "GPU/Vulkan/GameFragmentShader.h"
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
 
@@ -49,7 +50,7 @@ static const SamplerDef samplersStereo[3] = {
 	{ 2, "pal" },
 };
 
-bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLanguageDesc &compat, Draw::Bugs bugs, uint64_t *uniformMask, FragmentShaderFlags *fragmentShaderFlags, std::string *errorString) {
+bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLanguageDesc &compat, Draw::Bugs bugs, uint64_t *uniformMask, FragmentShaderFlags *fragmentShaderFlags, std::string *errorString, bool precompiledVulkan) {
 	*uniformMask = 0;
 	*fragmentShaderFlags = (FragmentShaderFlags)0;
 	errorString->clear();
@@ -536,7 +537,7 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	if ((colorWriteMask || replaceLogicOp) && !hasPackUnorm4x8) {
 		WRITE(p, "uint packUnorm4x8%s(%svec4 v) {\n", packSuffix, compat.shaderLanguage == GLSL_VULKAN ? "highp " : "");
 		WRITE(p, "  highp vec4 f = clamp(v, 0.0, 1.0);\n");
-		WRITE(p, "  uvec4 u = uvec4(255.0 * f);\n");
+		WRITE(p, "  uvec4 u = uvec4(floor(255.0 * f + 0.5));\n");
 		WRITE(p, "  return u.x | (u.y << 0x8u) | (u.z << 0x10u) | (u.w << 0x18u);\n");
 		WRITE(p, "}\n");
 
@@ -893,10 +894,10 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				p.C("  vec4 t = ").SampleTexture2D("tex", "uv_round").C(";\n");
 				p.C("  int index;\n");
 				p.C("  switch (component) {\n");
-				p.C("  case 0: index = int(t.x * 254.99); break;\n");  // TODO: Not sure why 254.99 instead of 255.99, but it's currently needed.
-				p.C("  case 1: index = int(t.y * 254.99); break;\n");
-				p.C("  case 2: index = int(t.z * 254.99); break;\n");
-				p.C("  case 3: index = int(t.w * 254.99); break;\n");
+				p.C("  case 0: index = int(t.x * 255.99); break;\n");
+				p.C("  case 1: index = int(t.y * 255.99); break;\n");
+				p.C("  case 2: index = int(t.z * 255.99); break;\n");
+				p.C("  case 3: index = int(t.w * 255.99); break;\n");
 				p.C("  }\n");
 				p.C("  t = ").LoadTexture2D("pal", "ivec2(index, 0)", 0).C(";\n");
 				break;
@@ -1320,7 +1321,20 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	}
 
 	WRITE(p, "}\n");
-
+	if (precompiledVulkan && compat.shaderLanguage == GLSL_VULKAN) {
+		bool terriblePrecision = (gl_extensions.bugs & BUG_PVR_SHADER_PRECISION_TERRIBLE) != 0;
+		bool clampDisabled = terriblePrecision && (id.Bit(FS_BIT_DO_TEXTURE_PROJ) || !id.Bit(FS_BIT_CLAMP_S) || !id.Bit(FS_BIT_CLAMP_T));
+		uint32_t features = needShaderTexClamp && !clampDisabled ? 1 : 0;
+		if (gl_extensions.bugs & BUG_PVR_SHADER_PRECISION_BAD) features |= 2;
+		if (gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT)) features |= 4;
+		int textureKind = !doTexture || isModeClear ? 0 : texture3D ? 2 : arrayTexture ? 3 : 1;
+		bool palette = textureKind != 0 && shaderDepalMode != ShaderDepalMode::OFF;
+		ShaderWriter compiled(buffer, compat, ShaderStage::Fragment, extensions, flags);
+		WriteGameVulkanFragmentShader(compiled, ub_baseStr, textureKind, palette, readFramebufferTex,
+			doFlatShading, useStereo, stencilToAlpha == REPLACE_ALPHA_DUALSOURCE,
+			writeDepth ? 1 : useDiscardStencilBugWorkaround ? 2 : 0,
+			uint32_t(id.ToUint64()), uint32_t(id.ToUint64() >> 32), features);
+	}
 	return true;
 }
 

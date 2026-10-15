@@ -132,6 +132,15 @@ static int SetupVertexAttribs(VkVertexInputAttributeDescription attrs[], const D
 	}
 	// Position is always there.
 	VertexAttribSetup(&attrs[count++], DecVtxFormat::PosFmt(), decFmt.posoff, PspAttributeLocation::POSITION);
+	for (PspAttributeLocation location : {PspAttributeLocation::TEXCOORD, PspAttributeLocation::NORMAL, PspAttributeLocation::COLOR0}) {
+		bool found = false;
+		for (int i = 0; i < count; ++i) {
+			found |= attrs[i].location == (uint32_t)location;
+		}
+		if (!found) {
+			VertexAttribSetup(&attrs[count++], DEC_FLOAT_1, decFmt.posoff, location);
+		}
+	}
 	return count;
 }
 

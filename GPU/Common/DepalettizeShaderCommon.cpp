@@ -16,6 +16,8 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include <cstdio>
+#include <cmath>
+#include <cstring>
 
 #include "Common/GPU/Shader.h"
 #include "Common/GPU/ShaderWriter.h"
@@ -41,6 +43,97 @@ static const SamplerDef samplers[2] = {
 static const VaryingDef varyings[1] = {
 	{ "vec2", "v_texcoord", Draw::SEM_TEXCOORD0, 0, "highp" },
 };
+
+// A single Vulkan program covers every palette mode. The bank specializes its
+// scalar defaults before module creation; GLSL compilation remains a valid
+// fallback if the shader source changes during development.
+void GenerateVulkanDepalFs(ShaderWriter &writer, const DepalConfig &config) {
+	// Preserve the six-decimal coordinate constant used by the legacy float
+	// shader (notably the SOCOM 5551/CLUT8 path).
+	float offset = (float)(std::round(((double)config.startPos + 0.5) / 512.0 * 1000000.0) / 1000000.0);
+	uint32_t offsetBits;
+	memcpy(&offsetBits, &offset, sizeof(offsetBits));
+	const uint32_t defaults[] = {
+		(uint32_t)config.bufferFormat, (uint32_t)config.textureFormat,
+		(uint32_t)config.smoothedDepal, config.shift, config.mask,
+		config.startPos, config.depthUpperBits, offsetBits,
+	};
+	for (uint32_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); ++i) {
+		writer.F("layout(constant_id = %u) const uint psp_spec_%u = %uu;\n", 100 + i, 100 + i, defaults[i]);
+	}
+	writer.DeclareSamplers(samplers);
+	writer.HighPrecisionFloat();
+	writer.BeginFSMain(g_draw2Duniforms, varyings);
+	writer.C(R"(
+  vec2 texcoord = v_texcoord;
+  if (psp_spec_100 == 4u && psp_spec_106 == 2u) {
+    int x = int((texcoord.x / scaleFactor) * texSize.x);
+    int xclear = x & 0x01F0;
+    int temp = (x - xclear) | ((x >> 1) & 0xF0) | ((x << 4) & 0x100);
+    texcoord.x = (float(temp) / texSize.x) * scaleFactor;
+  }
+  vec4 color = )").SampleTexture2D("tex", "texcoord").C(R"(;
+  vec4 outColor;
+  float coord;
+  if (psp_spec_102 != 0u) {
+    float multiplier = psp_spec_100 == 0u && psp_spec_103 == 5u ? 63.0 : 31.0;
+    uint channel = psp_spec_103 == 0u ? 0u : (psp_spec_103 == 5u ? 1u : 2u);
+    coord = (color[channel] * multiplier + 0.5) * 0.001953;
+    outColor = )").SampleTexture2D("pal", "vec2(coord, 0.0)").C(R"(;
+  } else if (psp_spec_100 == 1u && psp_spec_101 == 5u) {
+    // Preserve the legacy floating-point SOCOM path rather than substituting
+    // integer reconstruction, which rounds the blue channel differently.
+    float lookup = color.r;
+    float multiplier = 0.5;
+    if (psp_spec_104 == 255u && psp_spec_103 == 0u) {
+      lookup = floor(floor(color.a) * 128.0 + color.b * 64.0);
+      multiplier = 0.001953;
+    } else if ((psp_spec_104 & (psp_spec_104 + 1u)) == 0u && psp_spec_103 < 16u) {
+      uint channel = psp_spec_103 / 5u;
+      uint shift = psp_spec_103 % 5u;
+      lookup = color[channel];
+      if (shift == 0u && psp_spec_104 == 31u) {
+        multiplier = 0.060547;
+      } else if (psp_spec_103 == 15u && psp_spec_104 == 1u) {
+        multiplier = 0.001953;
+      } else {
+        const float factors[5] = float[5](31.990000, 15.995000, 7.997500, 3.998750, 1.999375);
+        lookup = mod(lookup * factors[shift], float(psp_spec_104 + 1u));
+        multiplier = 0.001953;
+      }
+    }
+    coord = lookup * multiplier + uintBitsToFloat(psp_spec_107);
+    outColor = )").SampleTexture2D("pal", "vec2(coord, 0.0)").C(R"(;
+  } else if (psp_spec_100 == 4u && psp_spec_101 == 0u) {
+    uint depth = uint(clamp(color.x * 65535.0, 0.0, 65535.0));
+    outColor = vec4(float(depth & 31u) / 31.0, float((depth >> 5u) & 63u) / 63.0,
+                    float((depth >> 11u) & 31u) / 31.0, 1.0);
+  } else {
+    uint index = 0u;
+    if (psp_spec_100 == 5u) {
+      index = uint(color.r * 255.99);
+    } else if (psp_spec_100 == 3u) {
+      uvec4 rgba = uvec4(color * 255.99);
+      index = rgba.r | (rgba.g << 8u) | (rgba.b << 16u) | (rgba.a << 24u);
+    } else if (psp_spec_100 == 2u) {
+      uvec4 rgba = uvec4(color * 15.99);
+      index = rgba.r | (rgba.g << 4u) | (rgba.b << 8u) | (rgba.a << 12u);
+    } else if (psp_spec_100 == 0u) {
+      uvec3 rgb = uvec3(color.rgb * vec3(31.99, 63.99, 31.99));
+      index = rgb.r | (rgb.g << 5u) | (rgb.b << 11u);
+    } else if (psp_spec_100 == 1u) {
+      uvec3 rgb = uvec3(color.rgb * 31.99);
+      index = rgb.r | (rgb.g << 5u) | (rgb.b << 10u) | (uint(color.a) << 15u);
+    } else if (psp_spec_100 == 4u) {
+      index = uint(clamp(color.x * 65535.0, 0.0, 65535.0));
+    }
+    index = ((index >> psp_spec_103) & psp_spec_104) | psp_spec_105;
+    coord = (float(index) + 0.5) * 0.001953;
+    outColor = )").SampleTexture2D("pal", "vec2(coord, 0.0)").C(R"(;
+  }
+)");
+	writer.EndFSMain("outColor");
+}
 
 // Uses integer instructions available since OpenGL 3.0, ES 3.0 (and 2.0 with extensions), and of course Vulkan and D3D11.
 void GenerateDepalShader300(ShaderWriter &writer, const DepalConfig &config) {
@@ -344,6 +437,10 @@ void GenerateDepalSmoothed(ShaderWriter &writer, const DepalConfig &config) {
 }
 
 void GenerateDepalFs(ShaderWriter &writer, const DepalConfig &config) {
+	if (writer.Lang().shaderLanguage == GLSL_VULKAN) {
+		GenerateVulkanDepalFs(writer, config);
+		return;
+	}
 	writer.DeclareSamplers(samplers);
 	writer.HighPrecisionFloat();
 	writer.BeginFSMain(config.bufferFormat == GE_FORMAT_DEPTH16 ? g_draw2Duniforms : Slice<UniformDef>::empty(), varyings);

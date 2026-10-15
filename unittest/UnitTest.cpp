@@ -2804,6 +2804,7 @@ bool TestLoongArch64Emitter();
 bool TestShaderGenerators();
 bool TestBuiltinVulkanShaders();
 bool TestBuiltinTextureShaders();
+bool TestBuiltinDepalShaders();
 bool TestSoftwareGPUJit();
 bool TestIRPassSimplify();
 bool TestThreadManager();
@@ -3024,6 +3025,7 @@ TestItem availableTests[] = {
 	TEST_ITEM(ShaderGenerators),
 	TEST_ITEM(BuiltinVulkanShaders),
 	TEST_ITEM(BuiltinTextureShaders),
+	TEST_ITEM(BuiltinDepalShaders),
 	TEST_ITEM(SoftwareGPUJit),
 	TEST_ITEM(Path),
 	TEST_ITEM(AndroidContentURI),

@@ -3,6 +3,8 @@
 #include "Common/GPU/Vulkan/BuiltinVulkanShaders.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "GPU/Common/Draw2D.h"
+#include "GPU/Common/DepalettizeShaderCommon.h"
+#include <map>
 #include "unittest/UnitTest.h"
 #include "Common/Data/Format/IniFile.h"
 #include "Common/File/FileUtil.h"
@@ -100,5 +102,63 @@ bool TestBuiltinTextureShaders() {
 		}
 	}
 	EXPECT_TRUE(checked >= 14);
+	return true;
+}
+
+static bool CheckDepalDefaults(const std::vector<uint32_t> &words, const DepalConfig &config) {
+	std::map<uint32_t, uint32_t> ids, literals;
+	for (size_t pos = 5; pos < words.size();) {
+		uint32_t count = words[pos] >> 16, opcode = words[pos] & 0xffff;
+		EXPECT_TRUE(count != 0 && pos + count <= words.size());
+		if (opcode == 71 && count == 4 && words[pos + 2] == 1) ids[words[pos + 1]] = words[pos + 3];
+		if (opcode == 50 && count == 4) literals[words[pos + 2]] = words[pos + 3];
+		pos += count;
+	}
+	float offset = (float)(std::round(((double)config.startPos + 0.5) / 512.0 * 1000000.0) / 1000000.0);
+	uint32_t offsetBits;
+	memcpy(&offsetBits, &offset, sizeof(offsetBits));
+	uint32_t expected[] = {(uint32_t)config.bufferFormat, (uint32_t)config.textureFormat,
+		(uint32_t)config.smoothedDepal, config.shift, config.mask, config.startPos, config.depthUpperBits, offsetBits};
+	EXPECT_TRUE(ids.size() == 8);
+	for (const auto &entry : ids) {
+		EXPECT_TRUE(entry.second >= 100 && entry.second < 108);
+		EXPECT_TRUE(literals.count(entry.first) == 1 && literals.at(entry.first) == expected[entry.second - 100]);
+	}
+	return true;
+}
+
+bool TestBuiltinDepalShaders() {
+	ShaderLanguageDesc language(GLSL_VULKAN);
+	char source[16384];
+	std::string goodSource;
+	for (int stereo = 0; stereo < 2; ++stereo) {
+		for (int format = GE_FORMAT_565; format <= GE_FORMAT_CLUT8; ++format) {
+			for (uint32_t shift : {0u, 1u, 5u, 8u, 15u, 16u, 24u, 31u}) {
+				DepalConfig config{};
+				config.bufferFormat = (GEBufferFormat)format;
+				config.textureFormat = format == GE_FORMAT_5551 ? GE_TFMT_CLUT8 : GE_TFMT_CLUT32;
+				config.mask = shift & 1 ? 0x1f : 0xff;
+				config.shift = shift;
+				config.startPos = (shift % 32) * 16;
+				config.depthUpperBits = shift & 1 ? 2 : 6;
+				ShaderWriter writer(source, language, ShaderStage::Fragment, Slice<const char *>::empty(),
+					stereo ? ShaderWriterFlags::FS_AUTO_STEREO : ShaderWriterFlags::NONE);
+				GenerateDepalFs(writer, config);
+				RET(CheckBuiltin(VK_SHADER_STAGE_FRAGMENT_BIT, source));
+				std::vector<uint32_t> words;
+				EXPECT_TRUE(LookupBuiltinVulkanShader(VK_SHADER_STAGE_FRAGMENT_BIT, source, words));
+				RET(CheckDepalDefaults(words, config));
+				goodSource = source;
+			}
+		}
+	}
+	std::vector<uint32_t> sentinel{0x12345678};
+	const std::string needle = "psp_spec_100 = ";
+	size_t value = goodSource.find(needle) + needle.size();
+	size_t end = goodSource.find('u', value);
+	EXPECT_TRUE(end != std::string::npos);
+	goodSource.replace(value, end - value, "4294967296");
+	EXPECT_FALSE(LookupBuiltinVulkanShader(VK_SHADER_STAGE_FRAGMENT_BIT, goodSource.c_str(), sentinel));
+	EXPECT_TRUE(sentinel.size() == 1 && sentinel[0] == 0x12345678);
 	return true;
 }

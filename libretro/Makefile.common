@@ -255,7 +255,6 @@ SOURCES_CXX += \
 	$(COMMONDIR)/GPU/Vulkan/VulkanFramebuffer.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanMemory.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanDescSet.cpp \
-	$(COMMONDIR)/GPU/Vulkan/VulkanProfiler.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanBarrier.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanGraphicsContext.cpp \
 	$(COMMONDIR)/Input/GestureDetector.cpp \

@@ -17,18 +17,9 @@
 #include "Common/GPU/Vulkan/VulkanLoader.h"
 #include "Common/GPU/Vulkan/VulkanDebug.h"
 #include "Common/GPU/Vulkan/VulkanAlloc.h"
-#include "Common/GPU/Vulkan/VulkanProfiler.h"
 #include "Common/GPU/Vulkan/VulkanPresentation.h"
 #include "Common/Thread/MpscQueue.h"
 #include "Common/Thread/ParkingLot.h"
-
-// Enable or disable a simple logging profiler for Vulkan.
-// Mostly useful for profiling texture uploads currently, but could be useful for
-// other things as well. We also have a nice integrated render pass profiler in the queue
-// runner, but this one is more convenient for transient events.
-
-#define VK_PROFILE_BEGIN(vulkan, cmd, stage, ...) vulkan->GetProfiler()->Begin(cmd, stage, __VA_ARGS__);
-#define VK_PROFILE_END(vulkan, cmd, stage) vulkan->GetProfiler()->End(cmd, stage);
 
 enum class VulkanInitFlags : uint32_t {
 	VALIDATE = (1 << 0),
@@ -62,7 +53,6 @@ struct VulkanPhysicalDeviceInfo {
 	bool canBlitToPreferredDepthStencilFormat;
 };
 
-class VulkanProfiler;
 class VulkanContext;
 
 // Extremely rough split of capabilities.
@@ -270,12 +260,8 @@ public:
 	VkFence CreateFence(bool presignalled);
 	bool CreateShaderModule(const std::vector<uint32_t> &spirv, VkShaderModule *shaderModule, const char *tag);
 
-	void BeginFrame(VkCommandBuffer firstCommandBuffer);
+	void BeginFrame();
 	void EndFrame();
-
-	VulkanProfiler *GetProfiler() {
-		return &frame_[curFrame_].profiler;
-	}
 
 	// Simple workaround for the casting warning.
 	template <class T>
@@ -462,7 +448,6 @@ public:
 		return presentMode_;
 	}
 
-
 	std::vector<VkPresentModeKHR> GetAvailablePresentModes() const {
 		return availablePresentModes_;
 	}
@@ -572,7 +557,6 @@ private:
 	struct FrameData {
 		FrameData() {}
 		VulkanDeleteList deleteList;
-		VulkanProfiler profiler;
 	};
 	FrameData frame_[MAX_INFLIGHT_FRAMES];
 	int curFrame_ = 0;
@@ -593,7 +577,6 @@ private:
 	bool swapchainInited_ = false;
 
 	PhysicalDeviceFeatures deviceFeatures_;
-
 
 
 	VkSurfaceCapabilitiesKHR surfCapabilities_{};

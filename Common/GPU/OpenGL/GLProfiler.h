@@ -8,7 +8,7 @@
 #include "Common/GPU/OpenGL/GLCommon.h"
 #include "Common/GPU/OpenGL/gl3stub.h"
 
-// Simple scoped based profiler for OpenGL, similar to VulkanProfiler.
+// Simple scope-based logging profiler for OpenGL.
 // Uses GL_EXT_disjoint_timer_query (GLES) or GL_ARB_timer_query (desktop GL).
 // Put the whole thing in a FrameData to allow for overlap.
 

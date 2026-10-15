@@ -773,9 +773,6 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 		return;
 	}
 
-	VK_PROFILE_BEGIN(vulkan, cmdInit, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-		"Texture Upload (%08x) video=%d", entry->addr, plan.isVideo);
-
 	// Upload the texture data. We simply reuse the same loop for 3D texture slices instead of mips, if we have those.
 	int levels;
 	if (plan.depth > 1) {
@@ -856,8 +853,6 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 				dataScaled = false;
 
 				VkImageView view = entry->vkTex->CreateViewForMip(i);
-				VK_PROFILE_BEGIN(vulkan, cmdInit, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-					"Compute Upload: %dx%d->%dx%d", mipUnscaledWidth, mipUnscaledHeight, mipWidth, mipHeight);
 				if (!ScaleBufferToImage(vulkan, cmdInit, view, texBuf, bufferOffset, srcSize, mipUnscaledWidth, mipUnscaledHeight, mipWidth, mipHeight)) {
 					// Nothing was written to this level. Clear it rather than leave garbage in it.
 					WARN_LOG_ONCE(vkscalefail, Log::G3D, "Hardware texture scaling failed, clearing the texture");
@@ -870,7 +865,6 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 					barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 					vkCmdPipelineBarrier(cmdInit, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 				}
-				VK_PROFILE_END(vulkan, cmdInit, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 				vulkan->Delete().QueueDeleteImageView(view);
 			} else {
 				loadLevel(uploadSize, i == 0 ? plan.baseLevelSrc : i, byteStride, plan.scaleFactor);
@@ -895,10 +889,8 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 	}
 
 	if (!copyBatch.empty()) {
-		VK_PROFILE_BEGIN(vulkan, cmdInit, VK_PIPELINE_STAGE_TRANSFER_BIT, "Copy Upload");
 		// Submit the whole batch of mip uploads.
 		entry->vkTex->FinishCopyBatch(cmdInit, &copyBatch);
-		VK_PROFILE_END(vulkan, cmdInit, VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
 
 	VkImageLayout layout = computeUpload ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -907,15 +899,12 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 	// Generate any additional mipmap levels.
 	// This will transition the whole stack to GENERAL if it wasn't already.
 	if (plan.levelsToLoad < plan.levelsToCreate) {
-		VK_PROFILE_BEGIN(vulkan, cmdInit, VK_PIPELINE_STAGE_TRANSFER_BIT, "Mipgen up to level %d", plan.levelsToCreate);
 		entry->vkTex->GenerateMips(cmdInit, plan.levelsToLoad, computeUpload);
 		layout = VK_IMAGE_LAYOUT_GENERAL;
 		prevStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		VK_PROFILE_END(vulkan, cmdInit, VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
 
 	entry->vkTex->EndCreate(cmdInit, false, prevStage, layout);
-	VK_PROFILE_END(vulkan, cmdInit, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
 
 	// Signal that we support depth textures so use it as one.
 	if (plan.depth > 1) {

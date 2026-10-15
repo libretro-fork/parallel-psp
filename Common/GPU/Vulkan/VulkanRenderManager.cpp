@@ -652,7 +652,7 @@ void VulkanRenderManager::RenderThreadFunc() {
 	VLOG("PULL: Quitting");
 }
 
-void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfiler) {
+void VulkanRenderManager::BeginFrame(bool enableProfiling) {
 	double frameBeginTime = time_now_d();
 	VLOG("BeginFrame");
 	VkDevice device = vulkan_->GetDevice();
@@ -789,7 +789,7 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 	VLOG("PUSH: BeginFrame %d", curFrame);
 
 	insideFrame_ = true;
-	vulkan_->BeginFrame(enableLogProfiler ? GetInitCmd() : VK_NULL_HANDLE);
+	vulkan_->BeginFrame();
 
 	frameData.profile.timestampDescriptions.clear();
 	if (frameData.profile.timestampsEnabled) {

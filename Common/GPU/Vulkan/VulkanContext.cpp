@@ -408,14 +408,10 @@ void VulkanContext::DestroyInstance() {
 	instance_ = VK_NULL_HANDLE;
 }
 
-void VulkanContext::BeginFrame(VkCommandBuffer firstCommandBuffer) {
+void VulkanContext::BeginFrame() {
 	FrameData *frame = &frame_[curFrame_];
 	// Process pending deletes.
 	frame->deleteList.PerformDeletes(this, allocator_);
-	// VK_NULL_HANDLE when profiler is disabled.
-	if (firstCommandBuffer) {
-		frame->profiler.BeginFrame(this, firstCommandBuffer);
-	}
 }
 
 void VulkanContext::EndFrame() {
@@ -1098,10 +1094,6 @@ VkResult VulkanContext::ReinitSurface() {
 		return VK_ERROR_INITIALIZATION_FAILED;
 	}
 
-	for (int i = 0; i < ARRAY_SIZE(frame_); i++) {
-		frame_[i].profiler.Init(this);
-	}
-
 	// Query presentation modes. We need to know which ones are available for InitSwapchain().
 	availablePresentModes_.clear();
 	uint32_t presentModeCount = 0;
@@ -1477,10 +1469,6 @@ void VulkanContext::DestroyDevice() {
 	}
 	if (surface_) {
 		ERROR_LOG(Log::G3D, "DestroyDevice: Surface should have been destroyed.");
-	}
-
-	for (int i = 0; i < ARRAY_SIZE(frame_); i++) {
-		frame_[i].profiler.Shutdown();
 	}
 
 	INFO_LOG(Log::G3D, "VulkanContext::DestroyDevice (performing deletes)");

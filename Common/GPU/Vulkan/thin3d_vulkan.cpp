@@ -1143,7 +1143,7 @@ VKContext::~VKContext() {
 }
 
 void VKContext::BeginFrame(DebugFlags debugFlags) {
-	renderManager_.BeginFrame(debugFlags & DebugFlags::PROFILE_TIMESTAMPS, debugFlags & DebugFlags::PROFILE_SCOPES);
+	renderManager_.BeginFrame(debugFlags & DebugFlags::PROFILE_TIMESTAMPS);
 	push_->BeginFrame();
 }
 

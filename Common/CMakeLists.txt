@@ -195,8 +195,6 @@ add_library(Common STATIC
 	GPU/Vulkan/VulkanLoader.h
 	GPU/Vulkan/VulkanMemory.cpp
 	GPU/Vulkan/VulkanMemory.h
-	GPU/Vulkan/VulkanProfiler.cpp
-	GPU/Vulkan/VulkanProfiler.h
 	GPU/Vulkan/thin3d_vulkan.cpp
 	GPU/Vulkan/VulkanRenderManager.cpp
 	GPU/Vulkan/VulkanRenderManager.h

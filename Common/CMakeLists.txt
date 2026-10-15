@@ -1,4 +1,9 @@
 if(WIN32)
+	set(CommonD3D9
+		GPU/D3D9/D3D9ShaderCompiler.cpp
+		GPU/D3D9/D3D9StateCache.cpp
+		GPU/D3D9/D3DCompilerLoader.cpp
+		GPU/D3D9/thin3d_d3d9.cpp)
 	set(CommonD3D
 		GPU/D3D11/thin3d_d3d11.cpp
 		GPU/D3D11/D3D11Loader.cpp
@@ -52,6 +57,7 @@ add_library(Common STATIC
 	LoongArch64Emitter.cpp
 	LoongArch64Emitter.h
 	${CommonD3D}
+	${CommonD3D9}
 	${CommonVR}
 	${CommonNonLibretro}
 	Serialize/Serializer.cpp

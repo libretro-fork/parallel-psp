@@ -32,6 +32,10 @@
 #include "GPU/Vulkan/GPU_Vulkan.h"
 #include "GPU/Software/SoftGpu.h"
 
+#if PPSSPP_API(D3D9)
+#include "GPU/Directx9/GPU_DX9.h"
+#endif
+
 #if PPSSPP_API(D3D11)
 #include "GPU/D3D11/GPU_D3D11.h"
 #endif
@@ -54,6 +58,12 @@ static GPUCommon *CreateGPUCore(GPUCore gpuCore, GraphicsContext *ctx, Draw::Dra
 #endif
 	case GPUCORE_SOFTWARE:
 		return new SoftGPU(ctx, draw);
+	case GPUCORE_DIRECTX9:
+#if PPSSPP_API(D3D9)
+		return new GPU_DX9(ctx, draw);
+#else
+		return nullptr;
+#endif
 	case GPUCORE_DIRECTX11:
 #if PPSSPP_API(D3D11)
 		return new GPU_D3D11(ctx, draw);
@@ -75,6 +85,11 @@ static GPUCommon *CreateGPUCore(GPUCore gpuCore, GraphicsContext *ctx, Draw::Dra
 }
 
 bool GPU_Init(GPUCore gpuCore, GraphicsContext *ctx, Draw::DrawContext *draw) {
+	if (!draw && gpuCore != GPUCORE_SOFTWARE) {
+		ERROR_LOG(Log::G3D, "Hardware drawing context is unavailable");
+		return false;
+	}
+
 	_dbg_assert_(draw || gpuCore == GPUCORE_SOFTWARE);
 	_dbg_assert_(!gpu);
 

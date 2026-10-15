@@ -48,9 +48,10 @@ bool GenerateFShader(FShaderID id, char *buffer, ShaderLanguage lang, Draw::Bugs
 		ShaderLanguageDesc compat(ShaderLanguage::GLSL_3xx);
 		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, &flags, errorString);
 	}
+	case ShaderLanguage::HLSL_D3D9:
 	case ShaderLanguage::HLSL_D3D11:
 	{
-		ShaderLanguageDesc compat(ShaderLanguage::HLSL_D3D11);
+		ShaderLanguageDesc compat(lang);
 		return GenerateFragmentShader(id, buffer, compat, bugs, &uniformMask, &flags, errorString);
 	}
 	default:
@@ -81,9 +82,10 @@ bool GenerateVShader(VShaderID id, char *buffer, ShaderLanguage lang, Draw::Bugs
 		ShaderLanguageDesc compat(ShaderLanguage::GLSL_3xx);
 		return GenerateVertexShader(id, buffer, compat, bugs, &attrMask, &uniformMask, &flags, errorString);
 	}
+	case ShaderLanguage::HLSL_D3D9:
 	case ShaderLanguage::HLSL_D3D11:
 	{
-		ShaderLanguageDesc compat(ShaderLanguage::HLSL_D3D11);
+		ShaderLanguageDesc compat(lang);
 		return GenerateVertexShader(id, buffer, compat, bugs, &attrMask, &uniformMask, &flags, errorString);
 	}
 	default:
@@ -104,12 +106,13 @@ bool TestCompileShader(const char *buffer, ShaderLanguage lang, ShaderStage stag
 	std::vector<uint32_t> spirv;
 	switch (lang) {
 #if PPSSPP_PLATFORM(WINDOWS)
+	case ShaderLanguage::HLSL_D3D9:
 	case ShaderLanguage::HLSL_D3D11:
 	{
 		const char *programType = nullptr;
 		switch (stage) {
-		case ShaderStage::Vertex: programType = "vs_4_0"; break;
-		case ShaderStage::Fragment: programType = "ps_4_0"; break;
+		case ShaderStage::Vertex: programType = lang == HLSL_D3D9 ? "vs_3_0" : "vs_4_0"; break;
+		case ShaderStage::Fragment: programType = lang == HLSL_D3D9 ? "ps_3_0" : "ps_4_0"; break;
 		default:
 			*errorMessage = "Unknown shader stage";
 			return false;
@@ -162,6 +165,7 @@ void PrintDiff(const char *a, const char *b) {
 
 const char *ShaderLanguageToString(ShaderLanguage lang) {
 	switch (lang) {
+	case HLSL_D3D9: return "HLSL_D3D9";
 	case HLSL_D3D11: return "HLSL_D3D11";
 	case GLSL_VULKAN: return "GLSL_VULKAN";
 	case GLSL_1xx: return "GLSL_1xx";
@@ -175,6 +179,7 @@ bool TestReinterpretShaders() {
 
 	ShaderLanguage languages[] = {
 #if PPSSPP_PLATFORM(WINDOWS)
+		ShaderLanguage::HLSL_D3D9,
 		ShaderLanguage::HLSL_D3D11,
 #endif
 		ShaderLanguage::GLSL_VULKAN,
@@ -230,6 +235,7 @@ bool TestStencilShaders() {
 
 	ShaderLanguage languages[] = {
 #if PPSSPP_PLATFORM(WINDOWS)
+		ShaderLanguage::HLSL_D3D9,
 		ShaderLanguage::HLSL_D3D11,
 #endif
 		ShaderLanguage::GLSL_VULKAN,
@@ -291,6 +297,7 @@ bool TestDepalShaders() {
 
 	ShaderLanguage languages[] = {
 #if PPSSPP_PLATFORM(WINDOWS)
+		ShaderLanguage::HLSL_D3D9,
 		ShaderLanguage::HLSL_D3D11,
 #endif
 		ShaderLanguage::GLSL_VULKAN,
@@ -343,6 +350,7 @@ bool TestDepalShaders() {
 
 const ShaderLanguage languages[] = {
 #if PPSSPP_PLATFORM(WINDOWS)
+	ShaderLanguage::HLSL_D3D9,
 	ShaderLanguage::HLSL_D3D11,
 #endif
 	ShaderLanguage::GLSL_VULKAN,

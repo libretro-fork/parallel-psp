@@ -286,6 +286,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { "vulkan", "Vulkan" },
 #endif
 #ifdef _WIN32
+         { "d3d9",   "D3D9" },
          { "d3d11",  "D3D11" },
 #endif
          { "none",   "None" },

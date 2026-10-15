@@ -59,4 +59,5 @@ enum class CoordConvention {
 	Direct3D11,
 	Vulkan,
 	OpenGL,
+	Direct3D9,
 };

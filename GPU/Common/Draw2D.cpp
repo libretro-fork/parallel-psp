@@ -308,8 +308,8 @@ void Draw2D::Blit(Draw2DPipeline *pipeline, float srcX1, float srcY1, float srcX
 	float xOffset = 0.0f;
 	float yOffset = 0.0f;
 	if (draw_->GetDeviceCaps().requiresHalfPixelOffset) {
-		xOffset = -dX * 0.5f;
-		yOffset = -dY * 0.5f;
+		xOffset = -dX;
+		yOffset = -dY;
 	}
 	Draw2DVertex vtx[4] = {
 		{ -1.0f + 2.0f * dX * dstX1 + xOffset, -(1.0f - 2.0f * dY * dstY1) + yOffset, sX * srcX1, sY * srcY1 },

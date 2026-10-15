@@ -5,6 +5,7 @@
 #include "libretro/LibretroVulkanContext.h"
 #ifdef _WIN32
 #include "libretro/LibretroD3D11Context.h"
+#include "libretro/LibretroD3D9Context.h"
 #endif
 
 #include "Common/Log.h"
@@ -139,6 +140,12 @@ LibretroGraphicsContext *LibretroGraphicsContext::CreateGraphicsContext() {
 #endif
 
 #ifdef _WIN32
+	if (preferred == RETRO_HW_CONTEXT_D3D9) {
+		ctx = new LibretroD3D9Context();
+		if (ctx->InitAPI(nullptr, nullptr, &errorMessage))
+			return ctx;
+		delete ctx;
+	}
 	if (preferred == RETRO_HW_CONTEXT_DUMMY || preferred == RETRO_HW_CONTEXT_D3D11) {
 		ctx = new LibretroD3D11Context();
 

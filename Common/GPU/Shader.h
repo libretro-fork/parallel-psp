@@ -17,6 +17,7 @@ enum ShaderLanguage {
 	GLSL_1xx = 1,
 	GLSL_3xx = 2,
 	GLSL_VULKAN = 4,
+	HLSL_D3D9 = 8,
 	HLSL_D3D11 = 16,
 };
 

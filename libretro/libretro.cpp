@@ -1261,6 +1261,8 @@ static void retro_check_backend(void) {
          backend = RETRO_HW_CONTEXT_OPENGL;
       else if (!strcmp(var.value, "vulkan"))
          backend = RETRO_HW_CONTEXT_VULKAN;
+      else if (!strcmp(var.value, "d3d9"))
+         backend = RETRO_HW_CONTEXT_D3D9;
       else if (!strcmp(var.value, "d3d11"))
          backend = RETRO_HW_CONTEXT_D3D11;
       else if (!strcmp(var.value, "none"))

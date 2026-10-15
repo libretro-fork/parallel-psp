@@ -9,7 +9,8 @@ set(LIBRETRO_SRCS
 
 if(WIN32)
 	set(LIBRETRO_SRCS ${LIBRETRO_SRCS}
-		LibretroD3D11Context.cpp)
+		LibretroD3D11Context.cpp
+		LibretroD3D9Context.cpp)
 endif()
 
 include_directories(libretro)

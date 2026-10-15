@@ -125,6 +125,7 @@ Lin::Matrix4x4 ComputeOrthoMatrix(float xres, float yres, CoordConvention coordC
 	switch (coordConvention) {
 	case CoordConvention::Vulkan:
 	case CoordConvention::Direct3D11:
+	case CoordConvention::Direct3D9:
 		ortho.setOrthoD3D(0.0f, xres, 0, yres, -1.0f, 1.0f);
 		break;
 	case CoordConvention::OpenGL:

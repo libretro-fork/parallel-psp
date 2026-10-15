@@ -217,10 +217,21 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		}
 
 		WRITE(p, "invariant gl_Position;\n");
-	} else if (compat.shaderLanguage == HLSL_D3D11) {
+	} else if (compat.shaderLanguage == HLSL_D3D11 || compat.shaderLanguage == HLSL_D3D9) {
 		// Note: These two share some code after this hellishly large if/else.
-		WRITE(p, "cbuffer base : register(b0) {\n%s};\n", ub_baseStr);
-		WRITE(p, "cbuffer lights: register(b1) {\n%s};\n", ub_vs_lightsStr);
+		if (compat.shaderLanguage == HLSL_D3D9) {
+			WRITE(p, "float4x4 u_proj : register(c0);\n");
+			WRITE(p, "float4x3 u_view : register(c4);\nfloat4x3 u_world : register(c7);\nfloat4x3 u_texmtx : register(c10);\n");
+			WRITE(p, "float4 u_halfPixel : register(c27);\nfloat4 u_xywh : register(c13);\nfloat4 vpScale_NaN : register(c14);\n#define u_vpScale vpScale_NaN.xyz\n#define u_NaN vpScale_NaN.w\n");
+			WRITE(p, "float4 u_vpOffset : register(c15);\nfloat4 raster_minmax : register(c16);\n#define u_rasterOffset raster_minmax.xy\n#define u_minZmaxZ raster_minmax.zw\n");
+			WRITE(p, "float4 u_uvscaleoffset : register(c17);\nfloat4 u_matambientalpha : register(c18);\nfloat4 fogcoef : register(c21);\n#define u_fogcoef fogcoef.xy\n");
+			WRITE(p, "float4 u_ambient : register(c32);\nfloat3 u_matdiffuse : register(c33);\nfloat4 u_matspecular : register(c34);\nfloat3 u_matemissive : register(c35);\n");
+			WRITE(p, "float3 u_lightpos[4] : register(c36);\nfloat3 u_lightdir[4] : register(c40);\nfloat3 u_lightatt[4] : register(c44);\nfloat4 u_lightangle_spotCoef[4] : register(c48);\n");
+			WRITE(p, "float3 u_lightambient[4] : register(c52);\nfloat3 u_lightdiffuse[4] : register(c56);\nfloat3 u_lightspecular[4] : register(c60);\n");
+		} else {
+			WRITE(p, "cbuffer base : register(b0) {\n%s};\n", ub_baseStr);
+			WRITE(p, "cbuffer lights: register(b1) {\n%s};\n", ub_vs_lightsStr);
+		}
 
 		// And the "varyings".
 		if (useHWTransform) {
@@ -271,7 +282,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 			WRITE(p, "  highp vec2 v_zw : TEXCOORD2;\n");
 		}
 		// gl_Position must be last for D3D11.
-		WRITE(p, "  vec4 gl_Position   : SV_Position;\n");
+		WRITE(p, "  vec4 gl_Position : %s;\n", compat.shaderLanguage == HLSL_D3D9 ? "POSITION" : "SV_Position");
 		if (clipMinMax && clipNearPlane) {
 			WRITE(p, "  float3 gl_ClipDistance : SV_ClipDistance;\n");
 		} else if (clipMinMax) {
@@ -451,7 +462,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 
 	if (ShaderLanguageIsOpenGL(compat.shaderLanguage) || compat.shaderLanguage == GLSL_VULKAN) {
 		WRITE(p, "void main() {\n");
-	} else if (compat.shaderLanguage == HLSL_D3D11) {
+	} else if (compat.shaderLanguage == HLSL_D3D9 || compat.shaderLanguage == HLSL_D3D11) {
 		WRITE(p, "VS_OUT main(VS_IN In) {\n");
 		WRITE(p, "  VS_OUT Out;\n");
 		if (hasTexcoord) {
@@ -511,7 +522,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		}
 		if (enableLighting || doShadeMapping) {
 			// The viewer is at infinity along view space +z: in world space, the view matrix's third column.
-			if (compat.shaderLanguage == HLSL_D3D11) {
+			if (compat.shaderLanguage == HLSL_D3D11 || compat.shaderLanguage == HLSL_D3D9) {
 				WRITE(p, "  mediump vec3 viewDir = normalizeOr001(vec3(u_view[0].z, u_view[1].z, u_view[2].z));\n");
 			} else {
 				WRITE(p, "  mediump vec3 viewDir = normalizeOr001(u_view[2].xyz);\n");
@@ -631,7 +642,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		}
 
 		// NOTE: Can't change this without updating uniform buffer declarations (for D3D11 and VK, the one in ShaderUniforms.h).
-		bool useIndexing = compat.shaderLanguage == HLSL_D3D11 || compat.shaderLanguage == GLSL_VULKAN;
+		bool useIndexing = compat.shaderLanguage == HLSL_D3D11 || compat.shaderLanguage == HLSL_D3D9 || compat.shaderLanguage == GLSL_VULKAN;
 
 		char iStr[4];
 
@@ -972,6 +983,10 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		WRITE(p, "  outPos.y *= -1.0;\n");
 	}
 
+	if (compat.shaderLanguage == HLSL_D3D9) {
+		WRITE(p, "  outPos.xy += u_halfPixel.xy * outPos.w;\n");
+	}
+
 	// We've named the output gl_Position in HLSL as well.
 	WRITE(p, "  %sgl_Position = outPos;\n", compat.vsOutPrefix);
 
@@ -998,7 +1013,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		// The formula takes the z component of gl_Position, which is currently in the range [0, w] (where w is the homogeneous coordinate), and transforms it to the range [-w, w]. This is done by first multiplying by 2 to scale the range from [0, w] to [0, 2w], and then subtracting w to shift the range to [-w, w]. This effectively converts the depth range from 0->1 to -1->1 after perspective division (when gl_Position is divided by w).
 	}
 
-	if (compat.shaderLanguage == HLSL_D3D11) {
+	if (compat.shaderLanguage == HLSL_D3D11 || compat.shaderLanguage == HLSL_D3D9) {
 		WRITE(p, "  return Out;\n");
 	}
 	WRITE(p, "}\n");

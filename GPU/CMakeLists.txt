@@ -66,7 +66,13 @@ set(GPU_D3D11
 # We build Vulkan even on Apple to avoid annoying build differences.
 set(GPU_IMPLS ${GPU_GLES} ${GPU_VULKAN})
 if(WIN32)
-	list(APPEND GPU_IMPLS ${GPU_D3D11})
+	list(APPEND GPU_IMPLS ${GPU_D3D11}
+		Directx9/DrawEngineDX9.cpp
+		Directx9/FramebufferManagerDX9.cpp
+		Directx9/GPU_DX9.cpp
+		Directx9/ShaderManagerDX9.cpp
+		Directx9/StateMappingDX9.cpp
+		Directx9/TextureCacheDX9.cpp)
 endif()
 
 set(GPU_SOURCES

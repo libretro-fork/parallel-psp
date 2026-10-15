@@ -497,7 +497,7 @@ Draw::Pipeline *PresentationCommon::CreatePipeline(std::vector<Draw::ShaderModul
 	Semantic pos = SEM_POSITION;
 	Semantic tc = SEM_TEXCOORD0;
 	// Shader translation marks these both as "TEXCOORDs" on HLSL...
-	if (postShader && lang_ == HLSL_D3D11) {
+	if (postShader && (lang_ == HLSL_D3D11 || lang_ == HLSL_D3D9)) {
 		pos = SEM_TEXCOORD0;
 		tc = SEM_TEXCOORD1;
 	}
@@ -701,6 +701,11 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	if (!srcTexture_ && !srcFramebuffer_) {
 		// Presenting blank, no need to run post shaders. But we did compute the output rect.
 		return;
+	}
+
+	if (GetGPUBackend() == GPUBackend::DIRECT3D9) {
+		rc_.x -= 0.5f;
+		rc_.y -= 0.5f;
 	}
 
 	// To make buffer updates easier, we use one array of verts.

@@ -1,10 +1,11 @@
-set(ARMIPS_REGEXP OFF CACHE BOOL "" FORCE)
-set(ARMIPS_LIBRARY_ONLY ON CACHE BOOL "" FORCE)
-if(WIN32)
-	set(ARMIPS_USE_STD_FILESYSTEM ON CACHE BOOL "" FORCE)
+if(UNITTEST)
+	set(ARMIPS_REGEXP OFF CACHE BOOL "" FORCE)
+	set(ARMIPS_LIBRARY_ONLY ON CACHE BOOL "" FORCE)
+	if(WIN32)
+		set(ARMIPS_USE_STD_FILESYSTEM ON CACHE BOOL "" FORCE)
+	endif()
+	add_subdirectory(armips)
 endif()
-
-add_subdirectory(armips)
 
 if(NOT USING_GLES2)
 	add_subdirectory(glew)

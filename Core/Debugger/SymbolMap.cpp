@@ -36,8 +36,6 @@
 
 #include "Common/Data/Encoding/Compression.h"
 
-#include "ext/armips/Core/Assembler.h"
-
 #include "Common/CommonTypes.h"
 #include "Common/Log.h"
 #include "Common/File/FileUtil.h"
@@ -1386,17 +1384,15 @@ bool SymbolMap::RemoveData(u32 startAddress, bool removeName) {
 	return true;
 }
 
-// Transforms the labels to lowercase when returning. Why?
-void SymbolMap::GetLabels(std::vector<LabelDefinition> &dest) {
+void SymbolMap::GetLabels(std::vector<SymbolEntry> &dest) {
 	if (activeNeedUpdate_)
 		UpdateActiveSymbols();
 
 	for (const auto &[key, label] : activeLabels) {
-		LabelDefinition entry;
-		entry.value = key;
-		std::string name = label.name;
-		std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-		entry.name = Identifier(name);
+		SymbolEntry entry;
+		entry.address = key;
+		entry.size = 0;
+		entry.name = label.name;
 		dest.push_back(entry);
 	}
 }

@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include <cstdarg>
 #include <cstring>
 #include <memory>
@@ -62,7 +64,16 @@ bool MipsAssembleOpcode(std::string_view line, DebugInterface *cpu, u32 address,
 	args.errorsResult = &errors;
 
 	if (g_symbolMap) {
-		g_symbolMap->GetLabels(args.labels);
+		std::vector<SymbolEntry> labels;
+		g_symbolMap->GetLabels(labels);
+		for (const auto &label : labels) {
+			std::string name = label.name;
+			std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+			LabelDefinition entry;
+			entry.name = Identifier(name);
+			entry.value = label.address;
+			args.labels.push_back(entry);
+		}
 	}
 
 	error->clear();

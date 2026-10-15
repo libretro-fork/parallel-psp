@@ -105,6 +105,24 @@ static void DestroyJitHarness() {
 	coreState = CORE_POWERDOWN;
 	currentMIPS = nullptr;
 	delete g_symbolMap;
+	g_symbolMap = nullptr;
+}
+
+bool TestMipsAssembler() {
+	SetupJitHarness();
+	const u32 address = PSP_GetUserMemoryBase();
+	const u32 target = address + 16;
+	g_symbolMap->AddLabel("MixedCaseAssemblerLabel", target);
+	std::string error;
+	const bool assembled = MipsAssembleOpcode("j mixedcaseassemblerlabel", currentDebugMIPS, address, &error);
+	const u32 opcode = Memory::ReadUnchecked_U32(address);
+	const bool invalidAccepted = MipsAssembleOpcode("invalid_opcode_for_test", currentDebugMIPS, address + 4, &error);
+	DestroyJitHarness();
+	EXPECT_TRUE(assembled);
+	EXPECT_EQ_HEX(opcode, 0x08000000u | ((target >> 2) & 0x03FFFFFFu));
+	EXPECT_FALSE(invalidAccepted);
+	EXPECT_FALSE(error.empty());
+	return true;
 }
 
 bool TestJit() {

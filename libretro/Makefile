@@ -302,7 +302,7 @@ else ifneq (,$(findstring windows_msvc2019,$(platform)))
 	endif
 
 	CFLAGS += $(MSVCCompileFlags) -nologo
-	CXXFLAGS += $(MSVCCompileFlags) -nologo -EHsc -DARMIPS_USE_STD_FILESYSTEM
+	CXXFLAGS += $(MSVCCompileFlags) -nologo -EHsc
 
 	TargetArchMoniker = $(subst $(WinPartition)_,,$(PlatformSuffix))
 
@@ -376,7 +376,7 @@ else ifneq (,$(findstring windows_msvc2019,$(platform)))
 else ifneq (,$(findstring win,$(platform)))
 	TARGET := $(TARGET_NAME)_libretro.dll
 	CFLAGS += -D_UNICODE -DUNICODE
-	CXXFLAGS += -fpermissive -Wno-multichar -D_UNICODE -DUNICODE -DARMIPS_USE_STD_FILESYSTEM
+	CXXFLAGS += -fpermissive -Wno-multichar -D_UNICODE -DUNICODE
 	LDFLAGS += -shared -Wl,--no-undefined -static-libgcc -static-libstdc++ -Wl,--version-script=link.T -lwinmm -lgdi32 -lwsock32 -lws2_32 -lversion -liphlpapi
 	GL_LIB := -lopengl32
 	PLATFORM_EXT = win32

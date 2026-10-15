@@ -24,6 +24,7 @@
 #include "Common/TimeUtil.h"
 
 #include "Common/Log.h"
+#include "Common/GPU/ReadbackStats.h"
 #include <wrl/client.h>
 
 using namespace Microsoft::WRL;
@@ -643,6 +644,10 @@ private:
 	// Framebuffer state
 	ComPtr<IDirect3DSurface9> deviceRTsurf;
 	ComPtr<IDirect3DSurface9> deviceDSsurf;
+	Draw::ReadbackStats readbackStats_{"d3d9"};
+	ComPtr<IDirect3DSurface9> readbackCrop_;
+	ComPtr<IDirect3DSurface9> readbackCropStaging_;
+	D3DSURFACE_DESC readbackCropDesc_{};
 	ComPtr<IDirect3DSurface9> readbackSurface_;
 	D3DSURFACE_DESC readbackDesc_{};
 	bool supportsINTZ = false;
@@ -1493,6 +1498,7 @@ bool D3D9Context::BlitFramebuffer(Framebuffer *srcfb, int srcX1, int srcY1, int 
 }
 
 bool D3D9Context::CopyFramebufferToMemory(Framebuffer *src, Aspect aspects, int bx, int by, int bw, int bh, Draw::DataFormat destFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
+	Draw::ReadbackStats::Scope readbackScope(readbackStats_, tag, mode, bw, bh, destFormat);
 	D3D9Framebuffer *fb = (D3D9Framebuffer *)src;
 
 	if (fb) {
@@ -1526,22 +1532,53 @@ bool D3D9Context::CopyFramebufferToMemory(Framebuffer *src, Aspect aspects, int 
 		else
 			deviceRTsurf->GetDesc(&desc);
 
-		if (!readbackSurface_ || readbackDesc_.Width != desc.Width || readbackDesc_.Height != desc.Height || readbackDesc_.Format != desc.Format) {
-			readbackSurface_ = nullptr;
-			hr = device_->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &readbackSurface_, nullptr);
-			if (SUCCEEDED(hr)) {
-				readbackDesc_ = desc;
+		IDirect3DSurface9 *downloadSource = fb ? fb->surf.Get() : deviceRTsurf.Get();
+		// Crop on the GPU when the requested area is less than half the target.
+		// GetRenderTargetData itself has no rectangular-copy API.
+		if ((uint64_t)bw * bh * 2 < (uint64_t)desc.Width * desc.Height && desc.MultiSampleType == D3DMULTISAMPLE_NONE) {
+			D3DSURFACE_DESC cropDesc{};
+			if (readbackCrop_) readbackCrop_->GetDesc(&cropDesc);
+			if (!readbackCrop_ || cropDesc.Width != (UINT)bw || cropDesc.Height != (UINT)bh || cropDesc.Format != desc.Format) {
+				readbackCrop_ = nullptr;
+				device_->CreateRenderTarget(bw, bh, desc.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &readbackCrop_, nullptr);
 			}
-		} else {
-			hr = D3D_OK;
-		}
-		offscreen = readbackSurface_;
-		if (SUCCEEDED(hr)) {
-			hr = device_->GetRenderTargetData(fb ? fb->surf.Get() : deviceRTsurf.Get(), offscreen.Get());
-			if (SUCCEEDED(hr)) {
-				hr = offscreen->LockRect(&locked, &rect, D3DLOCK_READONLY);
+			if (readbackCrop_ && SUCCEEDED(device_->StretchRect(downloadSource, &rect, readbackCrop_.Get(), nullptr, D3DTEXF_NONE))) {
+				downloadSource = readbackCrop_.Get();
+				desc.Width = bw;
+				desc.Height = bh;
+				rect = {0, 0, (LONG)bw, (LONG)bh};
 			}
 		}
+		for (int attempt = 0; attempt < 2; ++attempt) {
+			const bool cropped = downloadSource == readbackCrop_.Get();
+			auto &staging = cropped ? readbackCropStaging_ : readbackSurface_;
+			auto &stagingDesc = cropped ? readbackCropDesc_ : readbackDesc_;
+			if (!staging || stagingDesc.Width != desc.Width || stagingDesc.Height != desc.Height || stagingDesc.Format != desc.Format) {
+				staging = nullptr;
+				hr = device_->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &staging, nullptr);
+				if (SUCCEEDED(hr)) {
+					stagingDesc = desc;
+				}
+			} else {
+				hr = D3D_OK;
+			}
+			offscreen = staging;
+			if (SUCCEEDED(hr)) {
+				readbackScope.Download((uint64_t)desc.Width * desc.Height * 4);
+				hr = device_->GetRenderTargetData(downloadSource, offscreen.Get());
+				if (SUCCEEDED(hr)) {
+					hr = offscreen->LockRect(&locked, &rect, D3DLOCK_READONLY);
+				}
+			}
+			IDirect3DSurface9 *original = fb ? fb->surf.Get() : deviceRTsurf.Get();
+			if (SUCCEEDED(hr) || downloadSource == original) {
+				break;
+			}
+			downloadSource = original;
+			original->GetDesc(&desc);
+			rect = {(LONG)bx, (LONG)by, (LONG)(bx + bw), (LONG)(by + bh)};
+		}
+
 	} else {
 		_assert_(fb->depthstenciltex != nullptr);
 		fb->depthstenciltex->GetLevelDesc(0, &desc);
@@ -1615,6 +1652,8 @@ void D3D9Context::HandleEvent(Event ev, int width, int height, void *param1, voi
 	switch (ev) {
 	case Event::LOST_BACKBUFFER:
 		readbackSurface_ = nullptr;
+		readbackCrop_ = nullptr;
+		readbackCropStaging_ = nullptr;
 		deviceRTsurf = nullptr;
 		deviceDSsurf = nullptr;
 		break;
@@ -1628,6 +1667,8 @@ void D3D9Context::HandleEvent(Event ev, int width, int height, void *param1, voi
 	case Event::GOT_DEVICE:
 	case Event::LOST_DEVICE:
 		readbackSurface_ = nullptr;
+		readbackCrop_ = nullptr;
+		readbackCropStaging_ = nullptr;
 		break;
 	case Event::RESIZED:
 		break;

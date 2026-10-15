@@ -1128,6 +1128,7 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 }
 
 bool VulkanRenderManager::CopyFramebufferToMemory(VKRFramebuffer *src, VkImageAspectFlags aspectBits, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, Draw::ReadbackMode mode, const char *tag) {
+	Draw::ReadbackStats::Scope readbackScope(readbackStats_, tag, mode, w, h, destFormat);
 	_dbg_assert_(insideFrame_);
 
 	for (int i = (int)steps_.size() - 1; i >= 0; i--) {
@@ -1144,13 +1145,19 @@ bool VulkanRenderManager::CopyFramebufferToMemory(VKRFramebuffer *src, VkImageAs
 	step->readback.src = src;
 	step->readback.srcRect.offset = { x, y };
 	step->readback.srcRect.extent = { (uint32_t)w, (uint32_t)h };
-	step->readback.delayed = mode == Draw::ReadbackMode::OLD_DATA_OK;
-	step->readback.dst = queueRunner_.PrepareReadback(frameData_[vulkan_->GetCurFrame()], src, w, h, step->readback.delayed);
+	const bool delayed = mode == Draw::ReadbackMode::OLD_DATA_OK && src;
+	step->readback.delayed = delayed;
+	ReadbackKey key{src, w, h, x, y, aspectBits, 0};
+	CachedReadback *readback = queueRunner_.PrepareReadback(frameData_[vulkan_->GetCurFrame()], key, delayed);
+	step->readback.dst = readback;
+	if (delayed) {
+		readbackScope.Coalesced(CoalescePendingReadbacks(steps_, readback));
+	}
 	step->dependencies.insert(src);
 	step->tag = tag;
 	steps_.push_back(step);
 
-	if (mode == Draw::ReadbackMode::BLOCK) {
+	if (!delayed) {
 		FlushSync();
 	}
 
@@ -1192,7 +1199,7 @@ bool VulkanRenderManager::CopyFramebufferToMemory(VKRFramebuffer *src, VkImageAs
 
 	// Need to call this after FlushSync so the pixels are guaranteed to be ready in CPU-accessible VRAM.
 	return queueRunner_.CopyReadbackBuffer(frameData_[vulkan_->GetCurFrame()],
-		mode == Draw::ReadbackMode::OLD_DATA_OK ? src : nullptr, w, h, srcFormat, destFormat, pixelStride, pixels);
+		readback, delayed, w, h, srcFormat, destFormat, pixelStride, pixels);
 }
 
 void VulkanRenderManager::CopyImageToMemorySync(VkImage image, int mipLevel, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, const char *tag) {
@@ -1206,13 +1213,13 @@ void VulkanRenderManager::CopyImageToMemorySync(VkImage image, int mipLevel, int
 	step->readback_image.srcRect.extent = { (uint32_t)w, (uint32_t)h };
 	step->readback_image.mipLevel = mipLevel;
 	step->tag = tag;
-	queueRunner_.PrepareReadback(frameData_[vulkan_->GetCurFrame()], nullptr, w, h, false);
+	CachedReadback *readback = queueRunner_.PrepareReadback(frameData_[vulkan_->GetCurFrame()], {nullptr, w, h, x, y, VK_IMAGE_ASPECT_COLOR_BIT, 0}, false);
 	steps_.push_back(step);
 
 	FlushSync();
 
 	// Need to call this after FlushSync so the pixels are guaranteed to be ready in CPU-accessible VRAM.
-	queueRunner_.CopyReadbackBuffer(frameData_[vulkan_->GetCurFrame()], nullptr, w, h, destFormat, destFormat, pixelStride, pixels);
+	queueRunner_.CopyReadbackBuffer(frameData_[vulkan_->GetCurFrame()], readback, false, w, h, destFormat, destFormat, pixelStride, pixels);
 
 	_dbg_assert_(steps_.empty());
 }

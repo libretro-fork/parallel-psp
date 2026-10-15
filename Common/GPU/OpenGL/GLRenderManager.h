@@ -14,6 +14,7 @@
 #include "Common/GPU/MiscTypes.h"
 #include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Log.h"
+#include "Common/GPU/ReadbackStats.h"
 #include "Common/GPU/OpenGL/GLQueueRunner.h"
 #include "Common/GPU/OpenGL/GLFrameData.h"
 #include "Common/GPU/OpenGL/GLCommon.h"
@@ -869,6 +870,7 @@ public:
 		return (int)steps_.size();
 	}
 
+	Draw::ReadbackStats readbackStats_{"gl"};
 private:
 	bool Run(GLRRenderThreadTask &task);
 

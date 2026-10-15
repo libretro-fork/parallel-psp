@@ -13,6 +13,7 @@
 #include "Common/Data/Encoding/Utf8.h"
 #include "Common/TimeUtil.h"
 #include "Common/Log.h"
+#include "Common/GPU/ReadbackStats.h"
 #include "Common/StringUtils.h"
 
 #include <map>
@@ -204,6 +205,7 @@ public:
 		invalidationCallback_ = callback;
 	}
 
+	Draw::ReadbackStats readbackStats_{"d3d11"};
 private:
 	void ApplyCurrentState();
 
@@ -1779,6 +1781,7 @@ bool D3D11DrawContext::ReadColorDelayed(D3D11Framebuffer *fb, int x, int y, int 
 }
 
 bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelBits, int bx, int by, int bw, int bh, Draw::DataFormat destFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
+	Draw::ReadbackStats::Scope readbackScope(readbackStats_, tag, mode, bw, bh, destFormat);
 	D3D11Framebuffer *fb = (D3D11Framebuffer *)src;
 
 	if (fb) {

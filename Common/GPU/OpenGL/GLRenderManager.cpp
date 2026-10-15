@@ -309,6 +309,7 @@ void GLRenderManager::BlitFramebuffer(GLRFramebuffer *src, GLRect2D srcRect, GLR
 }
 
 bool GLRenderManager::CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBits, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, Draw::ReadbackMode mode, const char *tag) {
+	Draw::ReadbackStats::Scope readbackScope(readbackStats_, tag, mode, w, h, destFormat);
 	_assert_(pixels);
 
 	GLRStep *step = new GLRStep{ GLRStepType::READBACK };

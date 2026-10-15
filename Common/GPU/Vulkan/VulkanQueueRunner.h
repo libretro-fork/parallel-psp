@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "Common/Thread/Promise.h"
 #include "Common/Data/Collections/Hashmaps.h"
@@ -247,11 +248,11 @@ public:
 	}
 
 	// Readback buffers are allocated here on the recording thread, so the render thread never
-	// touches the allocator. src == nullptr or !delayed means the sync readback buffer.
-	CachedReadback *PrepareReadback(FrameData &frameData, VKRFramebuffer *src, int width, int height, bool delayed);
+	// touches the allocator. !delayed selects the synchronous staging buffer.
+	CachedReadback *PrepareReadback(FrameData &frameData, const ReadbackKey &key, bool delayed);
 
-	// src == 0 means to copy from the sync readback buffer.
-	bool CopyReadbackBuffer(FrameData &frameData, VKRFramebuffer *src, int width, int height, Draw::DataFormat srcFormat, Draw::DataFormat destFormat, int pixelStride, uint8_t *pixels);
+	// The caller retains the staging pointer across a possible synchronous flush.
+	bool CopyReadbackBuffer(FrameData &frameData, CachedReadback *readback, bool delayed, int width, int height, Draw::DataFormat srcFormat, Draw::DataFormat destFormat, int pixelStride, uint8_t *pixels);
 
 	VKRRenderPass *GetRenderPass(const RPKey &key);
 
@@ -331,3 +332,22 @@ private:
 };
 
 const char *VKRRenderCommandToString(VKRRenderCommand cmd);
+
+// Pending delayed copies to the same staging buffer are never published between
+// submissions. Keep only the last copy, including any intervening rendering.
+inline size_t CoalescePendingReadbacks(std::vector<VKRStep *> &steps, CachedReadback *destination) {
+	size_t removed = 0;
+	for (size_t i = steps.size(); i > 0;) {
+		VKRStep *step = steps[--i];
+		if (step->stepType == VKRStepType::READBACK_IMAGE ||
+			(step->stepType == VKRStepType::READBACK && !step->readback.delayed)) {
+			break;  // Never cross a synchronous consumer.
+		}
+		if (step->stepType == VKRStepType::READBACK && step->readback.dst == destination) {
+			delete step;
+			steps.erase(steps.begin() + i);
+			++removed;
+		}
+	}
+	return removed;
+}

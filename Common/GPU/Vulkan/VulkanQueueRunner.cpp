@@ -1703,15 +1703,11 @@ void VulkanQueueRunner::ResizeReadbackBuffer(CachedReadback *readback, VkDeviceS
 	readback->isCoherent = (memoryType.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
 }
 
-CachedReadback *VulkanQueueRunner::PrepareReadback(FrameData &frameData, VKRFramebuffer *src, int width, int height, bool delayed) {
+CachedReadback *VulkanQueueRunner::PrepareReadback(FrameData &frameData, const ReadbackKey &key, bool delayed) {
 	// TODO: Handle different readback formats!
-	const VkDeviceSize size = sizeof(uint32_t) * (VkDeviceSize)width * (VkDeviceSize)height;
+	const VkDeviceSize size = sizeof(uint32_t) * (VkDeviceSize)key.width * (VkDeviceSize)key.height;
 	CachedReadback *cached = &syncReadback_;
 	if (delayed) {
-		ReadbackKey key;
-		key.framebuf = src;
-		key.width = width;
-		key.height = height;
 		if (!frameData.readbacks_.Get(key, &cached)) {
 			cached = new CachedReadback();
 			cached->bufferSize = 0;
@@ -1814,22 +1810,9 @@ void VulkanQueueRunner::PerformReadbackImage(const VKRStep &step, VkCommandBuffe
 	// Doing that will also act like a heavyweight barrier ensuring that device writes are visible on the host.
 }
 
-bool VulkanQueueRunner::CopyReadbackBuffer(FrameData &frameData, VKRFramebuffer *src, int width, int height, Draw::DataFormat srcFormat, Draw::DataFormat destFormat, int pixelStride, uint8_t *pixels) {
-	CachedReadback *readback = &syncReadback_;
-
-	// Look up in readback cache.
-	if (src) {
-		ReadbackKey key;
-		key.framebuf = src;
-		key.width = width;
-		key.height = height;
-		CachedReadback *cached;
-		if (frameData.readbacks_.Get(key, &cached) && cached->createdFrame != frameData.frameId) {
-			readback = cached;
-		} else {
-			// Didn't have a cached image ready yet
-			return false;
-		}
+bool VulkanQueueRunner::CopyReadbackBuffer(FrameData &frameData, CachedReadback *readback, bool delayed, int width, int height, Draw::DataFormat srcFormat, Draw::DataFormat destFormat, int pixelStride, uint8_t *pixels) {
+	if (delayed && readback->createdFrame == frameData.frameId) {
+		return false;  // This frame's first submission has no completed pixels yet.
 	}
 
 	if (!readback->buffer)

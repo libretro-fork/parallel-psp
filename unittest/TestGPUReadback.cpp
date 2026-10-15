@@ -18,6 +18,51 @@
 #include "Common/GPU/thin3d.h"
 #include "ppsspp_config.h"
 #include "unittest/UnitTest.h"
+#include "Common/GPU/Vulkan/VulkanQueueRunner.h"
+
+bool TestVulkanReadbackPlan() {
+	CachedReadback first{}, second{};
+	std::vector<VKRStep *> steps;
+	auto add = [&](CachedReadback *dst, bool delayed) {
+		auto *step = new VKRStep(VKRStepType::READBACK);
+		step->readback.delayed = delayed;
+		step->readback.dst = dst;
+		steps.push_back(step);
+	};
+	add(&first, true);
+	steps.push_back(new VKRStep(VKRStepType::RENDER));
+	add(&second, true);
+	add(&first, true);
+	EXPECT_EQ_INT(CoalescePendingReadbacks(steps, &first), 2);
+	EXPECT_EQ_INT(steps.size(), 2);
+	EXPECT_TRUE(steps[0]->stepType == VKRStepType::RENDER);
+	EXPECT_TRUE(steps[1]->readback.dst == &second);
+	add(&first, false);
+	add(&first, true);
+	EXPECT_EQ_INT(CoalescePendingReadbacks(steps, &first), 1);
+	EXPECT_TRUE(!steps.back()->readback.delayed);
+	for (auto *step : steps) delete step;
+	steps.clear();
+	add(&first, true);
+	steps.push_back(new VKRStep(VKRStepType::READBACK_IMAGE));
+	EXPECT_EQ_INT(CoalescePendingReadbacks(steps, &first), 0);
+	for (auto *step : steps) delete step;
+	// Equal-size rectangles at distinct origins/aspects must not share staging.
+	DenseHashMap<ReadbackKey, int> cache(8);
+	ReadbackKey key{nullptr, 7, 3, 2, 1, VK_IMAGE_ASPECT_COLOR_BIT, 0};
+	cache.Insert(key, 1);
+	key.x = 3; cache.Insert(key, 2);
+	key.y = 4; cache.Insert(key, 3);
+	key.aspect = VK_IMAGE_ASPECT_DEPTH_BIT; cache.Insert(key, 4);
+	int found = 0;
+	EXPECT_TRUE(cache.Get(key, &found)); EXPECT_EQ_INT(found, 4);
+	key.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+	EXPECT_TRUE(cache.Get(key, &found)); EXPECT_EQ_INT(found, 3);
+	key.y = 1; EXPECT_TRUE(cache.Get(key, &found)); EXPECT_EQ_INT(found, 2);
+	key.x = 2; EXPECT_TRUE(cache.Get(key, &found)); EXPECT_EQ_INT(found, 1);
+	return true;
+}
+
 #ifdef _WIN32
 #include "Common/GPU/D3D9/D3D9StateCache.h"
 #include "Common/GPU/thin3d_create.h"
@@ -155,6 +200,13 @@ bool TestD3D9Readback() {
 			for (uint32_t color : {0xff332211u, 0xff665544u}) {
 				RenderPassInfo rp{RPAction::CLEAR, RPAction::KEEP, RPAction::KEEP, color, 1.0f, 0, "ReadbackTest"};
 				draw->BindFramebufferAsRenderTarget(fb, rp, "ReadbackTest");
+				// A distinct rectangle catches wrong crop origins, not just pitch.
+				D3DVIEWPORT9 viewport{0, 0, (DWORD)width, 16, 0.0f, 1.0f};
+				EXPECT_TRUE(SUCCEEDED(device->SetViewport(&viewport)));
+				EXPECT_TRUE(SUCCEEDED(device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE)));
+				D3DRECT patch{2, 3, 9, 6};
+				EXPECT_TRUE(SUCCEEDED(device->Clear(1, &patch, D3DCLEAR_TARGET, 0xff112233, 1.0f, 0)));
+				EXPECT_TRUE(SUCCEEDED(device->BeginScene()));
 				std::vector<uint32_t> pixels(11 * 3, 0xdeadbeef);
 				for (ReadbackMode mode : {ReadbackMode::BLOCK, ReadbackMode::OLD_DATA_OK}) {
 					EXPECT_TRUE(draw->CopyFramebufferToMemory(fb, Aspect::COLOR_BIT, 2, 3, 7, 3,
@@ -162,10 +214,17 @@ bool TestD3D9Readback() {
 															  "ReadbackTest"));
 					for (int y = 0; y < 3; ++y) {
 						for (int x = 0; x < 11; ++x) {
-							EXPECT_EQ_HEX(pixels[y * 11 + x], x < 7 ? color : 0xdeadbeefu);
+							EXPECT_EQ_HEX(pixels[y * 11 + x], x < 7 ? 0xff332211u : 0xdeadbeefu);
 						}
 					}
 				}
+				EXPECT_TRUE(SUCCEEDED(device->EndScene()));
+				// A full-target read exercises the uncropped path after cached crops.
+				std::vector<uint32_t> full(width * 16);
+				EXPECT_TRUE(draw->CopyFramebufferToMemory(fb, Aspect::COLOR_BIT, 0, 0, width, 16,
+					DataFormat::R8G8B8A8_UNORM, full.data(), width, ReadbackMode::BLOCK, "ReadbackFullTest"));
+				EXPECT_EQ_HEX(full[0], color);
+				EXPECT_EQ_HEX(full[3 * width + 2], 0xff332211u);
 			}
 			draw->HandleEvent(Event::LOST_BACKBUFFER, 0, 0);
 		}

@@ -66,8 +66,29 @@ reuse the latest completed copy and skip a new submission if both slots are busy
 Current-data, depth/stencil and unsupported GL paths keep synchronous semantics.
 GL allocation, fence or mapping failures fall back to synchronous reads.
 
+Vulkan delayed staging keys include the framebuffer, rectangle and aspect.
+Before submission, repeated delayed copies to the same staging buffer coalesce
+to the last copy. Synchronous consumers remain ordering boundaries. A delayed
+read with no framebuffer falls back to a synchronous backbuffer copy.
+
 D3D9 reuses its system-memory readback surface across compatible requests.
-`GetRenderTargetData` remains synchronous and still transfers the whole target.
+For non-MSAA rectangles smaller than half the target, it first tries a GPU crop
+into a reusable render target. Only the crop is downloaded. Unsupported crop or
+download operations retry the original full-target path. The download still
+blocks; this reduces transfer size, not the number of waits.
+
+Set `PPSSPP_READBACK_STATS=1` before launching a frontend for per-context,
+per-tag stdout summaries on shutdown for Vulkan, GL, D3D11 and D3D9. Normal operation
+does not sample a timer or allocate statistics rows. `requested_bytes` counts
+logical destination bytes; it does not imply a completed GPU transfer.
+`blocking_requests` counts explicit BLOCK requests, excluding implicit bootstrap
+or fallback stalls. `elapsed_ms` includes host waiting, conversion and copying,
+not isolated GPU execution time. `coalesced` counts removed Vulkan copy steps.
+`download_attempt_bytes` is tracked for D3D9 color downloads only, including
+failed attempts; zero on other backends means untracked. Caller tags distinguish
+first-frame, compatibility, full framebuffer and block-transfer reads where the
+shared path forwards them. `PPSSPPUnitTest VulkanReadbackPlan` checks queue
+coalescing boundaries and independent rectangle/aspect cache keys.
 
 On Windows, `PPSSPPUnitTest D3D11Readback D3D9Readback GLReadback` exercises the
 native backends without showing a game window. The D3D11 check uses WARP; the D3D9

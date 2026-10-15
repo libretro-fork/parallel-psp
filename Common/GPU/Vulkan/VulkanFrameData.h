@@ -48,6 +48,10 @@ struct ReadbackKey {
 	const VKRFramebuffer *framebuf;
 	int width;
 	int height;
+	int x;
+	int y;
+	VkImageAspectFlags aspect;
+	uint32_t reserved = 0;  // Keep all bytes explicit for the raw-key hash.
 };
 
 struct CachedReadback {

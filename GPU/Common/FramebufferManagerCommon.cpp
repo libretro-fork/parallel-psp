@@ -1048,7 +1048,7 @@ void FramebufferManagerCommon::DownloadFramebufferOnSwitch(VirtualFramebuffer *v
 
 		// TODO: This type of download could be made async, for less stutter on framebuffer creation.
 		if (GetSkipGPUReadbackMode() == SkipGPUReadbackMode::NO_SKIP && !PSP_CoreParameter().compat.flags().DisableFirstFrameReadback) {
-			ReadFramebufferToMemory(vfb, 0, 0, vfb->safeWidth, vfb->safeHeight, RASTER_COLOR, Draw::ReadbackMode::BLOCK);
+			ReadFramebufferToMemory(vfb, 0, 0, vfb->safeWidth, vfb->safeHeight, RASTER_COLOR, Draw::ReadbackMode::BLOCK, "FirstFrame");
 			vfb->usageFlags = (vfb->usageFlags | FB_USAGE_DOWNLOAD | FB_USAGE_FIRST_FRAME_SAVED) & ~FB_USAGE_DOWNLOAD_CLEAR;
 			vfb->safeWidth = 0;
 			vfb->safeHeight = 0;
@@ -1076,14 +1076,14 @@ void FramebufferManagerCommon::NotifyRenderFramebufferSwitched(VirtualFramebuffe
 	if (prevVfb) {
 		if (ShouldDownloadFramebufferColor(prevVfb) && !prevVfb->memoryUpdated) {
 			// NOTE: This path is ONLY for the Dangan Ronpa hack, see ShouldDownloadFramebufferColor
-			ReadFramebufferToMemory(prevVfb, 0, 0, prevVfb->width, prevVfb->height, RASTER_COLOR, Draw::ReadbackMode::OLD_DATA_OK);
+			ReadFramebufferToMemory(prevVfb, 0, 0, prevVfb->width, prevVfb->height, RASTER_COLOR, Draw::ReadbackMode::OLD_DATA_OK, "CompatColor");
 			prevVfb->usageFlags = (prevVfb->usageFlags | FB_USAGE_DOWNLOAD | FB_USAGE_FIRST_FRAME_SAVED) & ~FB_USAGE_DOWNLOAD_CLEAR;
 		} else {
 			DownloadFramebufferOnSwitch(prevVfb);
 		}
 
 		if (ShouldDownloadFramebufferDepth(prevVfb)) {
-			ReadFramebufferToMemory(prevVfb, 0, 0, prevVfb->width, prevVfb->height, RasterChannel::RASTER_DEPTH, Draw::ReadbackMode::BLOCK);
+			ReadFramebufferToMemory(prevVfb, 0, 0, prevVfb->width, prevVfb->height, RasterChannel::RASTER_DEPTH, Draw::ReadbackMode::BLOCK, "CompatDepth");
 		}
 	}
 
@@ -1744,7 +1744,7 @@ void FramebufferManagerCommon::DecimateFBOs() {
 		int age = frameLastFramebufUsed_ - std::max(vfb->last_frame_render, vfb->last_frame_used);
 
 		if (ShouldDownloadFramebufferColor(vfb) && age == 0 && !vfb->memoryUpdated) {
-			ReadFramebufferToMemory(vfb, 0, 0, vfb->width, vfb->height, RASTER_COLOR, Draw::ReadbackMode::BLOCK);
+			ReadFramebufferToMemory(vfb, 0, 0, vfb->width, vfb->height, RASTER_COLOR, Draw::ReadbackMode::BLOCK, "FramebufferDownload");
 			vfb->usageFlags = (vfb->usageFlags | FB_USAGE_DOWNLOAD | FB_USAGE_FIRST_FRAME_SAVED) & ~FB_USAGE_DOWNLOAD_CLEAR;
 		}
 
@@ -2226,7 +2226,7 @@ bool FramebufferManagerCommon::NotifyFramebufferCopy(u32 src, u32 dst, int size,
 		if (srcH == 0 || srcY + srcH > srcBuffer->bufferHeight) {
 			WARN_LOG_ONCE(btdcpyheight, Log::FrameBuf, "Memcpy fbo download %08x -> %08x skipped, %d+%d is taller than %d", src, dst, srcY, srcH, srcBuffer->bufferHeight);
 		} else if (GetSkipGPUReadbackMode() == SkipGPUReadbackMode::NO_SKIP && (!srcBuffer->memoryUpdated || channel == RASTER_DEPTH)) {
-			ReadFramebufferToMemory(srcBuffer, 0, srcY, srcBuffer->width, srcH, channel, Draw::ReadbackMode::BLOCK);
+			ReadFramebufferToMemory(srcBuffer, 0, srcY, srcBuffer->width, srcH, channel, Draw::ReadbackMode::BLOCK, "BlockTransfer");
 			gstate_c.textureSyncTimeDomain++;
 			srcBuffer->usageFlags = (srcBuffer->usageFlags | FB_USAGE_DOWNLOAD) & ~FB_USAGE_DOWNLOAD_CLEAR;
 		}
@@ -2828,7 +2828,7 @@ bool FramebufferManagerCommon::NotifyBlockTransferBefore(u32 dstBasePtr, int dst
 				if (tooTall) {
 					WARN_LOG_ONCE(btdheight, Log::G3D, "Block transfer download %08x -> %08x dangerous, %d+%d is taller than %d", srcBasePtr, dstBasePtr, srcRect.y, srcRect.h, srcRect.vfb->bufferHeight);
 				}
-				ReadFramebufferToMemory(srcRect.vfb, static_cast<int>(srcX * srcXFactor), srcY, static_cast<int>(srcRect.w_bytes * srcXFactor), srcRect.h, RASTER_COLOR, Draw::ReadbackMode::BLOCK);
+				ReadFramebufferToMemory(srcRect.vfb, static_cast<int>(srcX * srcXFactor), srcY, static_cast<int>(srcRect.w_bytes * srcXFactor), srcRect.h, RASTER_COLOR, Draw::ReadbackMode::BLOCK, "BlockTransferRect");
 				gstate_c.textureSyncTimeDomain++;
 				srcRect.vfb->usageFlags = (srcRect.vfb->usageFlags | FB_USAGE_DOWNLOAD) & ~FB_USAGE_DOWNLOAD_CLEAR;
 			}
@@ -3206,7 +3206,7 @@ bool FramebufferManagerCommon::GetOutputFramebuffer(GPUDebugBuffer &buffer) {
 // (Except using the GPU might cause problems because of various implementations'
 // dithering behavior and games that expect exact colors like Danganronpa, so we
 // can't entirely be rid of the CPU path.) -- unknown
-void FramebufferManagerCommon::ReadbackFramebuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode) {
+void FramebufferManagerCommon::ReadbackFramebuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode, const char *tag) {
 	if (w <= 0 || h <= 0) {
 		ERROR_LOG(Log::FrameBuf, "Bad inputs to ReadbackFramebufferSync: %d %d %d %d", x, y, w, h);
 		return;
@@ -3252,12 +3252,12 @@ void FramebufferManagerCommon::ReadbackFramebuffer(VirtualFramebuffer *vfb, int 
 			x * vfb->renderScaleFactor, y * vfb->renderScaleFactor,
 			w * vfb->renderScaleFactor, h * vfb->renderScaleFactor, (uint16_t *)destPtr, stride, w, h, mode);
 	} else {
-		draw_->CopyFramebufferToMemory(vfb->fbo, channel == RASTER_COLOR ? Draw::Aspect::COLOR_BIT : Draw::Aspect::DEPTH_BIT, x, y, w, h, destFormat, destPtr, stride, mode, "ReadbackFramebufferSync");
+		draw_->CopyFramebufferToMemory(vfb->fbo, channel == RASTER_COLOR ? Draw::Aspect::COLOR_BIT : Draw::Aspect::DEPTH_BIT, x, y, w, h, destFormat, destPtr, stride, mode, tag);
 	}
 
-	char tag[128];
-	size_t len = snprintf(tag, sizeof(tag), "FramebufferPack/%08x_%08x_%dx%d_%s", vfb->fb_address, vfb->z_address, w, h, GeBufferFormatToString(vfb->fb_format));
-	NotifyMemInfo(MemBlockFlags::WRITE, fb_address + dstByteOffset, dstSize, tag, len);
+	char memoryTag[128];
+	size_t len = snprintf(memoryTag, sizeof(memoryTag), "FramebufferPack/%08x_%08x_%dx%d_%s", vfb->fb_address, vfb->z_address, w, h, GeBufferFormatToString(vfb->fb_format));
+	NotifyMemInfo(MemBlockFlags::WRITE, fb_address + dstByteOffset, dstSize, memoryTag, len);
 
 	if (mode == Draw::ReadbackMode::BLOCK) {
 		gpuStats.perFrame.numBlockingReadbacks++;
@@ -3270,7 +3270,7 @@ bool FramebufferManagerCommon::ReadbackStencilbuffer(Draw::Framebuffer *fbo, int
 	return draw_->CopyFramebufferToMemory(fbo, Draw::Aspect::DEPTH_BIT, x, y, w, h, Draw::DataFormat::S8, pixels, pixelsStride, mode, "ReadbackStencilbufferSync");
 }
 
-void FramebufferManagerCommon::ReadFramebufferToMemory(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode) {
+void FramebufferManagerCommon::ReadFramebufferToMemory(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode, const char *tag) {
 	if (!vfb || !vfb->fbo) {
 		return;
 	}
@@ -3310,7 +3310,7 @@ void FramebufferManagerCommon::ReadFramebufferToMemory(VirtualFramebuffer *vfb, 
 	}
 
 	// This handles any required stretching internally.
-	ReadbackFramebuffer(vfb, x, y, w, h, channel, mode);
+	ReadbackFramebuffer(vfb, x, y, w, h, channel, mode, tag);
 
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 	textureCache_->ForgetLastTexture();

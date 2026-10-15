@@ -23,6 +23,7 @@
 #include "Common/GPU/Vulkan/VulkanFramebuffer.h"
 #include "Common/GPU/Vulkan/VulkanDescSet.h"
 #include "Common/GPU/thin3d.h"
+#include "Common/GPU/ReadbackStats.h"
 #include "Common/Thread/Thread.h"
 #include "Common/Thread/MpscQueue.h"
 #include "Common/Thread/ParkingLot.h"
@@ -613,6 +614,7 @@ private:
 	PipelineFlags curPipelineFlags_{};
 	BoundingRect curRenderArea_;
 
+	Draw::ReadbackStats readbackStats_{"vulkan"};
 	std::vector<VKRStep *> steps_;
 
 	// Execution time state

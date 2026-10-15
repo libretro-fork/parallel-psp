@@ -362,7 +362,7 @@ public:
 	void NotifyBlockTransferAfter(u32 dstBasePtr, int dstStride, int dstX, int dstY, u32 srcBasePtr, int srcStride, int srcX, int srcY, int w, int h, int bpp, u32 skipDrawReason);
 
 	bool BindFramebufferAsColorTexture(int stage, VirtualFramebuffer *framebuffer, int flags, int layer);
-	void ReadFramebufferToMemory(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode);
+	void ReadFramebufferToMemory(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode, const char *tag = "FramebufferMemoryRead");
 
 	void DownloadFramebufferForClut(u32 fb_address, u32 loadBytes);
 	bool DrawFramebufferToOutput(const DisplayLayoutConfig &config, const u8 *srcPixels, int srcStride, GEBufferFormat srcPixelFormat);
@@ -513,7 +513,7 @@ public:
 	inline int PeekBindSeqCount() const { return fbBindSeqCount_; }
 
 protected:
-	virtual void ReadbackFramebuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode);
+	virtual void ReadbackFramebuffer(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode, const char *tag = "FramebufferMemoryRead");
 	// Used for when a shader is required, such as GLES.
 	virtual bool ReadbackDepthbuffer(Draw::Framebuffer *fbo, int x, int y, int w, int h, uint16_t *pixels, int pixelsStride, int destW, int destH, Draw::ReadbackMode mode);
 	virtual bool ReadbackStencilbuffer(Draw::Framebuffer *fbo, int x, int y, int w, int h, uint8_t *pixels, int pixelsStride, Draw::ReadbackMode mode);

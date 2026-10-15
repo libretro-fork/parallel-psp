@@ -88,11 +88,13 @@ int rh264_video_set_extradata(rh264_video *v, const uint8_t *avcc, size_t len);
  * decode order: returns 1 when a picture is ready through rh264_video_plane,
  * 0 when the data was consumed but the picture is still held for reordering,
  * and negative on malformed input or an unsupported (high-profile) stream. */
+/* 2 on hardware backpressure: retry with the same live data and length. */
 int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len);
 
 /* Hand out the next pending picture in display order without feeding more
  * data, for end of stream. Returns 0 when a picture became available through
  * rh264_video_plane, -1 when nothing is pending. */
+/* 2 when hardware output is busy; retry later. */
 int rh264_video_drain(rh264_video *v);
 
 /* Bits per sample of the decoded pictures (8..14).  Above 8 the planes
@@ -255,12 +257,16 @@ typedef struct rh264_hw_ops
     * NULL when the backend cannot take the stream. On the decoding
     * thread, as are the rest. */
    void *(*open)(void *user, const rh264_hw_sps_t *sps, unsigned slots);
-   /* Decode @pic into its slot; 0, or negative on failure. */
+   /* 0 done, 1 busy without submitting, negative on failure. */
    int (*decode)(void *dec, const rh264_hw_pic_t *pic);
    /* The picture in @slot is to be shown: a frame of it into @out that
-    * stays good while the slot is decoded into again. 0, or negative. */
+    * stays good while the slot is decoded into again. 0 done, 1 busy
+    * without taking a lease, negative on failure. */
    int (*output)(void *dec, unsigned slot, video_hw_frame_t *out);
    void (*close)(void *dec);
+   /* Optional: copy the visible picture in slot to packed I420 planes.
+    * Strides are width for Y, ceil(width/2) for U and V. */
+   int (*readback)(void *dec, unsigned slot, uint8_t *planes[3]);
 } rh264_hw_ops_t;
 
 /* The backend decoders try when asked to (rh264_video_set_hw);
@@ -273,6 +279,9 @@ void rh264_set_hw_backend(const rh264_hw_ops_t *ops);
  * be known (rh264_video_set_extradata) - false when it decodes in
  * software. Not with a thread pool. */
 int rh264_video_set_hw(rh264_video *v, int enable);
+/* Request hardware decoding with CPU planes before feeding Annex-B input.
+ * Parameter sets enable it before the first slice, or software is used. */
+void rh264_video_set_hw_readback(rh264_video *v, int enable);
 /* Whether the pictures come from the backend. */
 int rh264_video_is_hw(const rh264_video *v);
 /* The picture decode or drain made ready, as a hardware frame; 0 when

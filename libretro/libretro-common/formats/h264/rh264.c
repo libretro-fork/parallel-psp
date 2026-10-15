@@ -5356,6 +5356,7 @@ struct rh264_video
    /* The hardware path's state, while the pictures decode on a
     * backend (rh264_video_set_hw); NULL otherwise. */
    struct rh264_hw *hw;
+   int hw_readback;
    /* Slice-decode workspace for rh264_video_decode_inter.  As locals
     * these were a 7.5 KiB frame -- the slice header, the B-list
     * context with its implicit-weight table, and the reference-list
@@ -10483,9 +10484,16 @@ typedef struct rh264_hw
    int out_gen[RH264_OUT_SLOTS];
    uint8_t out_used[RH264_OUT_SLOTS];
    int out_len;
+   int pending_out;
+   const uint8_t *retry_data;
+   size_t retry_len, retry_pos;
+   int retrying, retry_got;
    rh264_hw_ref_t refs[RH264_MAX_REFS];
    video_hw_frame_t shown;
    int have_shown;
+   uint8_t *cpu;
+   int cpu_w, cpu_h;
+   int have_cpu;
    int fresh;                  /* shown during the present call     */
 } rh264_hw;
 
@@ -10679,17 +10687,51 @@ static int rh264_hw_out_pick(const rh264_hw *hw)
 static int rh264_hw_show(rh264_video *v, int i)
 {
    rh264_hw *hw     = v->hw;
-   hw->out_used[i]  = 0;
-   hw->out_len--;
+   video_hw_frame_t shown;
+   int r;
+   if (v->hw_readback)
+   {
+      int w = hw->sps.width, h = hw->sps.height;
+      size_t y = (size_t)w * h, c = (size_t)((w + 1) / 2) * ((h + 1) / 2);
+      uint8_t *planes[3];
+      hw->have_cpu = 0;
+      if (hw->cpu_w != w || hw->cpu_h != h)
+      {
+         free(hw->cpu);
+         hw->cpu = (uint8_t*)malloc(y + 2 * c);
+         hw->cpu_w = w;
+         hw->cpu_h = h;
+      }
+      if (!hw->cpu)
+         return -1;
+      planes[0] = hw->cpu;
+      planes[1] = hw->cpu + y;
+      planes[2] = hw->cpu + y + c;
+      if (hw->ops->readback(hw->dec, (unsigned)hw->out_slot[i], planes) != 0)
+      {
+         hw->broken = 1;
+         return -1;
+      }
+      hw->have_cpu = 1;
+      hw->fresh = 1;
+      hw->out_used[i] = 0;
+      hw->out_len--;
+      return 0;
+   }
    /* two pictures in one call: the first is passed over */
-   if (hw->fresh)
-      video_hw_frame_abandon(&hw->shown);
-   hw->have_shown   = 0;
-   if (hw->ops->output(hw->dec, (unsigned)hw->out_slot[i], &hw->shown) != 0)
+   r = hw->ops->output(hw->dec, (unsigned)hw->out_slot[i], &shown);
+   if (r > 0)
+      return 2;
+   if (r < 0)
    {
       hw->broken = 1;
       return -1;
    }
+   if (hw->fresh)
+      video_hw_frame_abandon(&hw->shown);
+   hw->shown = shown;
+   hw->out_used[i] = 0;
+   hw->out_len--;
    hw->have_shown = 1;
    hw->fresh      = 1;
    return 0;
@@ -10699,7 +10741,7 @@ static int rh264_hw_show(rh264_video *v, int i)
 static int rh264_hw_out_push(rh264_video *v, int poc, int is_idr)
 {
    rh264_hw *hw = v->hw;
-   int i, slot = -1;
+   int i, r, slot = -1;
    for (i = 0; i < RH264_OUT_SLOTS; i++)
       if (!hw->out_used[i]) { slot = i; break; }
    if (slot < 0)
@@ -10711,8 +10753,12 @@ static int rh264_hw_out_push(rh264_video *v, int poc, int is_idr)
    hw->out_len++;
    if (hw->out_len <= v->reorder_delay && !(is_idr && hw->out_len == 1))
       return 0;
-   if (rh264_hw_show(v, rh264_hw_out_pick(hw)) != 0)
-      return -1;
+   i = rh264_hw_out_pick(hw);
+   r = rh264_hw_show(v, i);
+   if (r == 2)
+      hw->pending_out = i + 1;
+   if (r != 0)
+      return r;
    return 1;
 }
 
@@ -10725,11 +10771,22 @@ static int rh264_hw_finish(rh264_video *v, int *got_pic)
    int j, r;
    unsigned n = 0;
 
+   if (hw->pending_out)
+   {
+      r = rh264_hw_show(v, hw->pending_out - 1);
+      if (r != 0)
+         return r;
+      hw->pending_out = 0;
+      *got_pic = 1;
+      return 0;
+   }
    if (!hw->pic_open)
       return 0;
-   hw->pic_open = 0;
    if (hw->skip)
+   {
+      hw->pic_open = 0;
       return 0;
+   }
 
    /* an IDR predicts from nothing: the DPB empties under it */
    for (j = 0; j < v->dpb_len && !hw->idr; j++)
@@ -10770,11 +10827,15 @@ static int rh264_hw_finish(rh264_video *v, int *got_pic)
             pic.long_term     = 1;
             pic.long_term_idx = v->pend_mmco_a[j];
          }
-   if (hw->ops->decode(hw->dec, &pic) != 0)
+   r = hw->ops->decode(hw->dec, &pic);
+   if (r > 0)
+      return 2;
+   if (r < 0)
    {
       hw->broken = 1;
       return -1;
    }
+   hw->pic_open = 0;
 
    if (hw->idr)
    {
@@ -10809,8 +10870,8 @@ static int rh264_hw_finish(rh264_video *v, int *got_pic)
       }
       r = rh264_hw_out_push(v, v->last_poc, epoch);
    }
-   if (r < 0)
-      return -1;
+   if (r < 0 || r == 2)
+      return r;
    if (r > 0)
       *got_pic = 1;
    return 0;
@@ -10845,8 +10906,11 @@ static int rh264_hw_slice(rh264_video *v, const uint8_t *nal, size_t len,
    if (sh->first_mb_in_slice == 0)
    {
       /* a picture the last access unit left open ends here */
-      if (rh264_hw_finish(v, got_pic) != 0)
-         return -1;
+      {
+         int r = rh264_hw_finish(v, got_pic);
+         if (r != 0)
+            return r;
+      }
       hw->skip = 0;
       if (nri == 0 && retro_atomic_load_acquire_int(&v->skip_nonref))
       {
@@ -10951,6 +11015,7 @@ static void rh264_hw_free(rh264_video *v)
       return;
    if (hw->dec)
       hw->ops->close(hw->dec);
+   free(hw->cpu);
    free(hw->bs);
    free(hw);
    v->hw = NULL;
@@ -10970,7 +11035,8 @@ int rh264_video_set_hw(rh264_video *v, int enable)
       return 1;
    ops = RH264_HW_BACKEND_GET();
    /* before the first picture, of a stream the backend could take */
-   if (     !ops || !v->have_sps || !v->have_pps || v->alloc_w
+   if (     !ops || (v->hw_readback && !ops->readback)
+         || !v->have_sps || !v->have_pps || v->alloc_w
          || v->cur->pic_open || !rh264_hw_stream_ok(&v->sps))
       return 0;
    if (!(hw = (rh264_hw*)calloc(1, sizeof(*hw))))
@@ -11018,6 +11084,12 @@ int rh264_video_set_hw(rh264_video *v, int enable)
    return 1;
 }
 
+void rh264_video_set_hw_readback(rh264_video *v, int enable)
+{
+   if (v && !v->hw && !v->alloc_w)
+      v->hw_readback = enable;
+}
+
 int rh264_video_is_hw(const rh264_video *v)
 {
    return (v && v->hw) ? 1 : 0;
@@ -11035,6 +11107,8 @@ static int rh264_video_handle_slice_nal(rh264_video *v, const uint8_t *nal,
       size_t nl, int *got_pic)
 {
    int type = nal[0] & 0x1f;
+   if (v->hw_readback && !v->hw)
+      rh264_video_set_hw(v, 1);
    if (v->hw)
    {
       if (v->hw->broken)
@@ -11042,7 +11116,7 @@ static int rh264_video_handle_slice_nal(rh264_video *v, const uint8_t *nal,
       if (type == 7 || type == 8)
          return rh264_hw_take_ps(v, nal, nl) != 0 ? -1 : 0;
       if (type == 5 || type == 1)
-         return rh264_hw_slice(v, nal, nl, got_pic) != 0 ? -1 : 0;
+         return rh264_hw_slice(v, nal, nl, got_pic);
       return 0;
    }
    /* a switching slice was refused earlier: everything after it would
@@ -11071,6 +11145,17 @@ static int rh264_video_handle_slice_nal(rh264_video *v, const uint8_t *nal,
    return 0;
 }
 
+static int rh264_hw_retry(rh264_video *v, const uint8_t *data,
+      size_t len, size_t pos, int got)
+{
+   v->hw->retry_data = data;
+   v->hw->retry_len  = len;
+   v->hw->retry_pos  = pos;
+   v->hw->retry_got  = got;
+   v->hw->retrying   = 1;
+   return 2;
+}
+
 int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len)
 {
    size_t p = 0;
@@ -11078,7 +11163,17 @@ int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len)
    if (!v || !data) return -1;
    v->dropped = 0;
    if (v->hw)
-      v->hw->fresh = 0;
+   {
+      if (v->hw->retrying)
+      {
+         if (data != v->hw->retry_data || len != v->hw->retry_len)
+            return -1;
+         p = v->hw->retry_pos;
+         got_pic = v->hw->retry_got;
+      }
+      else
+         v->hw->fresh = 0;
+   }
 
    if (v->nal_length_size > 0 && len >= (size_t)v->nal_length_size)
    {
@@ -11091,12 +11186,14 @@ int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len)
       int ls = v->nal_length_size, i;
       while (p + ls <= len)
       {
-         size_t nl = 0;
+         size_t nl = 0, at = p;
          for (i = 0; i < ls; i++) nl = (nl << 8) | data[p + i];
          p += ls;
          if (nl == 0 || p + nl > len) break;
          {
             int r = rh264_video_handle_slice_nal(v, data + p, nl, &got_pic);
+            if (r == 2)
+               return rh264_hw_retry(v, data, len, at, got_pic);
             if (r < 0) return -1;
             /* One coded picture per call: sequentially the picture
              * shown is this sample's, complete at its last slice, and
@@ -11125,6 +11222,8 @@ int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len)
          if (s < e)
          {
             int r = rh264_video_handle_slice_nal(v, data + s, e - s, &got_pic);
+            if (r == 2)
+               return rh264_hw_retry(v, data, len, p, got_pic);
             if (r < 0) return -1;
             /* One coded picture per call: sequentially the picture
              * shown is this sample's, complete at its last slice, and
@@ -11138,8 +11237,15 @@ int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len)
       }
    }
    /* on the backend a picture is whole at the end of its access unit */
-   if (v->hw && rh264_hw_finish(v, &got_pic) != 0)
-      return -1;
+   if (v->hw)
+   {
+      int r = rh264_hw_finish(v, &got_pic);
+      if (r == 2)
+         return rh264_hw_retry(v, data, len, len, got_pic);
+      v->hw->retrying = 0;
+      if (r < 0)
+         return -1;
+   }
    return got_pic ? 1 : 0;
 }
 
@@ -11257,7 +11363,19 @@ const uint8_t *rh264_video_plane(const rh264_video *v, int plane,
    const uint8_t *p;
    const rh264_frame *f;
    int st, w, h;
-   if (!v || v->hw) return NULL;
+   if (!v || plane < 0 || plane > 2) return NULL;
+   if (v->hw)
+   {
+      const rh264_hw *hw = v->hw;
+      size_t y = (size_t)hw->cpu_w * hw->cpu_h;
+      size_t c = (size_t)((hw->cpu_w + 1) / 2) * ((hw->cpu_h + 1) / 2);
+      if (!hw->have_cpu)
+         return NULL;
+      if (stride) *stride = plane ? (hw->cpu_w + 1) / 2 : hw->cpu_w;
+      if (width) *width = plane ? (hw->cpu_w + 1) / 2 : hw->cpu_w;
+      if (height) *height = plane ? (hw->cpu_h + 1) / 2 : hw->cpu_h;
+      return hw->cpu + (plane == 0 ? 0 : plane == 1 ? y : y + c);
+   }
    f = (v->out_show >= 0) ? &v->out[v->out_show] : &v->cur->f;
    /* Cropping is display-only (reference reads use the full coded
     * picture), so it is applied here and nowhere else: the returned
@@ -11285,9 +11403,15 @@ int rh264_video_drain(rh264_video *v)
    if (v->hw)
    {
       int got = 0;
+      int r;
+      if (v->hw->retrying)
+         return 2;
       v->hw->fresh = 0;
-      if (v->hw->broken || rh264_hw_finish(v, &got) != 0)
+      if (v->hw->broken)
          return -1;
+      r = rh264_hw_finish(v, &got);
+      if (r != 0)
+         return r;
       if (got)
          return 0;
       if ((i = rh264_hw_out_pick(v->hw)) < 0)

@@ -722,9 +722,10 @@ enum retro_mod
  */
 
 /**
- * This bit indicates that the associated environment call is experimental,
- * and may be changed or removed in the future.
- * Frontends should mask out this bit before handling the environment call.
+ * This bit used to indicate that the associated environment call is experimental,
+ * and may be changed or removed in the future, but this has since changed.
+ * Frontends should NOT mask out this bit before handling the environment call,
+ * as some callbacks need it to distinguish themselves from others.
  */
 #define RETRO_ENVIRONMENT_EXPERIMENTAL 0x10000
 
@@ -1682,6 +1683,22 @@ enum retro_mod
  * @see RETRO_ENVIRONMENT_SET_HW_RENDER
  */
 #define RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE (43 | RETRO_ENVIRONMENT_EXPERIMENTAL)
+
+/**
+ * Notifies the frontend of any quirks associated with serialization.
+ *
+ * Should be set in either \c retro_init or \c retro_load_game, but not both.
+ * @param[in, out] data <tt>uint64_t *</tt>.
+ * Pointer to the core's serialization quirks.
+ * The frontend will set the flags of the quirks it supports
+ * and clear the flags of those it doesn't.
+ * Behavior is undefined if \c NULL.
+ * @return \c true if this environment call is supported.
+ * @see retro_serialize
+ * @see retro_unserialize
+ * @see RETRO_SERIALIZATION_QUIRK
+ */
+#define RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS 44
 
 /**
  * The frontend will try to use a "shared" context when setting up a hardware context.
@@ -2718,20 +2735,12 @@ enum retro_mod
 #define RETRO_ENVIRONMENT_GET_MEMORY_STATUS (86 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 
 /**
- * Notifies the frontend of any quirks associated with serialization.
+ * Legacy compatibility shim to RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS.
+ * Cores should avoid using this, as it is not as well-supported.
  *
- * Should be set in either \c retro_init or \c retro_load_game, but not both.
- * @param[in, out] data <tt>uint64_t *</tt>.
- * Pointer to the core's serialization quirks.
- * The frontend will set the flags of the quirks it supports
- * and clear the flags of those it doesn't.
- * Behavior is undefined if \c NULL.
- * @return \c true if this environment call is supported.
- * @see retro_serialize
- * @see retro_unserialize
  * @see RETRO_SERIALIZATION_QUIRK
  */
-#define RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS 87
+#define RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS_2 87
 
 /**
  * Queries whether the active video driver can present a 10-bit-per-channel
@@ -3006,7 +3015,12 @@ enum retro_vr_reference_space {
  * both eyes are shown; only set together with PRESENTS. */
 #define RETRO_VIDEO_VIEWS_STATUS_PRESENTS (1 << 0)
 #define RETRO_VIDEO_VIEWS_STATUS_STEREO   (1 << 1)
-/** An active headset session is presenting; eye-tagged views render on it. */
+/** A headset session is running and head tracking is available:
+ * RETRO_ENVIRONMENT_GET_VR_FRAME_STATE and GET_VR_HEAD_POSE answer, and a
+ * map with RETRO_VIDEO_VIEWS_FLAG_TRACKED becomes the head-tracked view.
+ * Only set together with PRESENTS and STEREO. A core learns about a
+ * headset from this bit only: SET_VIDEO_VIEWS returning true means the
+ * map was accepted, headset or not. */
 #define RETRO_VIDEO_VIEWS_STATUS_HMD      (1 << 2)
 
 /* The eye a view shows; see RETRO_ENVIRONMENT_SET_VIDEO_VIEWS. */
@@ -3016,8 +3030,14 @@ enum retro_vr_reference_space {
 
 /* The most views one map may hold. */
 #define RETRO_VIDEO_VIEWS_MAX      8
-/** The core asks for a flat presentation even on a headset. */
-#define RETRO_VIDEO_VIEWS_FLAG_REQUEST_FLAT (1 << 0)
+/** The map's one LEFT and one RIGHT view were drawn from this frame's
+ * RETRO_ENVIRONMENT_GET_VR_FRAME_STATE eye poses and fields of view.
+ * While RETRO_VIDEO_VIEWS_STATUS_HMD is set, the frontend shows those two
+ * as the headset's head-tracked view and every other view as a screen.
+ * Without HMD the flag changes nothing. While HMD is set, a map with the
+ * flag and any views must hold exactly one LEFT and one RIGHT view, or it
+ * is refused; an empty map clears the views whatever its flags. */
+#define RETRO_VIDEO_VIEWS_FLAG_TRACKED (1 << 0)
 
 /**
  * One view of the frame.
@@ -3049,26 +3069,29 @@ struct retro_video_views
    /** RETRO_VIDEO_VIEWS_FLAG_ values. */
    unsigned flags;
 
-   /** Headset reference space for eye-tagged views. */
+   /**
+    * The space a TRACKED map's poses are in: LOCAL (seated) or STAGE
+    * (standing, LOCAL where the runtime has none).
+    */
    enum retro_vr_reference_space reference_space;
 
    /**
-    * Requested interpupillary distance in meters, used only if the
-    * frontend cannot obtain one from the runtime/HMD itself.
-    * 0.0f means "use whatever the frontend/runtime already knows".
-    */
-   float ipd_hint_m;
-
-   /**
-    * Output: recommended size of one eye-tagged view's render target.
-    * The core must not use these to determine its system AV geometry;
-    * the frame geometry stays retro_get_system_av_info()'s.
+    * Output, while RETRO_VIDEO_VIEWS_STATUS_HMD is set: the recommended
+    * size of one eye's render target; 0 otherwise.
+    * The frontend does not change the core's geometry for it: a core
+    * that draws at this size reports its new frame size with
+    * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO.
     */
    unsigned recommended_view_width;
    unsigned recommended_view_height;
 };
 
-#define RETRO_VR_FRAME_RECENTERED     (1u << 0)  /* user recentered: re-capture any reference */
+/* RETRO_VR_FRAME_RECENTERED: the user or the runtime recentered, the
+ * runtime moved STAGE, or a new headset session started, as after a
+ * video driver restart. LOCAL poses then have a new origin; STAGE poses
+ * keep the room's through a recenter. A core that was paused hears of it
+ * at its next frame. A core keeping a reference pose takes it again. */
+#define RETRO_VR_FRAME_RECENTERED     (1u << 0)
 #define RETRO_VR_FRAME_TARGET_RESIZED (1u << 1)  /* eye size changed: call SET_VIDEO_VIEWS again */
 
 /**
@@ -3241,6 +3264,170 @@ struct retro_vr_head_pose
 
    /* orientation/position are valid */
    uint32_t flags;
+};
+
+/**
+ * Retrieves where the user's hands are: each motion controller's poses
+ * and each hand's joints.
+ *
+ * A core reads a pose, a joint or a field only when its flag says so.
+ *
+ * The three poses are:
+ *  - grip: /input/grip/pose, at the palm's
+ *    centre when the hand closes on the controller. -Z runs through the
+ *    tube the closed fingers make, from the little finger toward the
+ *    thumb; +X is normal to the flat palm, away from it on the left
+ *    hand and into it on the right.
+ *  - aim: /input/aim/pose, the pointing ray, -Z forward from the
+ *    controller's tip: where a laser or a shot starts.
+ *  - palm: the palm's centre at its surface, -Z the way
+ *    a straightened index finger points, +X as for grip: where a hand
+ *    model goes.
+ *
+ * A runtime that drives a controller profile from a bare tracked hand
+ * reports that hand as active, with grip and aim taken from the hand.
+ * The poses and joints are those the frontend sampled for this run,
+ * before retro_run(); call it from retro_run().
+ *
+ * @param[out] data <tt>struct retro_vr_controller_poses *</tt>.
+ * @return false if no VR session exists or no valid sample is available,
+ * and from a frontend that does not know the call. true with neither
+ * hand RETRO_VR_HAND_ACTIVE: a session that sees no hands.
+ * @see retro_vr_controller_poses
+ */
+#define RETRO_ENVIRONMENT_GET_VR_CONTROLLER_POSES (100 | RETRO_ENVIRONMENT_EXPERIMENTAL)
+
+/** Which hand a \ref retro_vr_hand_state describes, and its index in
+ * \ref retro_vr_controller_poses::hands. */
+enum retro_vr_hand
+{
+   RETRO_VR_HAND_LEFT  = 0,
+   RETRO_VR_HAND_RIGHT = 1,
+   RETRO_VR_HAND_COUNT = 2,
+
+   /** @private Defined to ensure <tt>sizeof(retro_vr_hand) == sizeof(int)</tt>. Do not use. */
+   RETRO_VR_HAND_DUMMY = INT_MAX
+};
+
+/* Flags of retro_vr_pose: OpenXR's XrSpaceLocationFlags and
+ * XrSpaceVelocityFlags. VALID: the value may be used. TRACKED: it is
+ * measured now rather than estimated, as a controller out of the
+ * headset's cameras' view keeps an estimated position for a while. */
+#define RETRO_VR_POSE_ORIENTATION_VALID      (1u << 0)
+#define RETRO_VR_POSE_POSITION_VALID         (1u << 1)
+#define RETRO_VR_POSE_ORIENTATION_TRACKED    (1u << 2)
+#define RETRO_VR_POSE_POSITION_TRACKED       (1u << 3)
+#define RETRO_VR_POSE_LINEAR_VELOCITY_VALID  (1u << 4)
+#define RETRO_VR_POSE_ANGULAR_VELOCITY_VALID (1u << 5)
+
+/**
+ * A pose and its motion in the tracking space.
+ *
+ * position and orientation are the pose-to-tracking-space transform.
+ * linear_velocity is the origin's velocity in meters per second;
+ * angular_velocity the rotation axis scaled by radians per second.
+ * Both are in tracking-space coordinates.
+ */
+struct retro_vr_pose
+{
+   float position[3];
+   float orientation[4];
+   float linear_velocity[3];
+   float angular_velocity[3];
+   /** RETRO_VR_POSE_ flags; 0 when nothing is known. */
+   uint32_t flags;
+};
+
+/**
+ * A hand's joints, in XR_EXT_hand_tracking's XrHandJointEXT order.
+ * Each joint's -Z points along its bone toward the fingertip, +Y out of
+ * the back of the hand. The palm joint is at the centre of the middle
+ * finger's metacarpal; the wrist joint at the wrist.
+ *
+ * The set is XR_EXT_hand_tracking's default one and is fixed: a larger
+ * joint set comes through a call of its own.
+ */
+enum retro_vr_hand_joint
+{
+   RETRO_VR_HAND_JOINT_PALM = 0,
+   RETRO_VR_HAND_JOINT_WRIST,
+   RETRO_VR_HAND_JOINT_THUMB_METACARPAL,
+   RETRO_VR_HAND_JOINT_THUMB_PROXIMAL,
+   RETRO_VR_HAND_JOINT_THUMB_DISTAL,
+   RETRO_VR_HAND_JOINT_THUMB_TIP,
+   RETRO_VR_HAND_JOINT_INDEX_METACARPAL,
+   RETRO_VR_HAND_JOINT_INDEX_PROXIMAL,
+   RETRO_VR_HAND_JOINT_INDEX_INTERMEDIATE,
+   RETRO_VR_HAND_JOINT_INDEX_DISTAL,
+   RETRO_VR_HAND_JOINT_INDEX_TIP,
+   RETRO_VR_HAND_JOINT_MIDDLE_METACARPAL,
+   RETRO_VR_HAND_JOINT_MIDDLE_PROXIMAL,
+   RETRO_VR_HAND_JOINT_MIDDLE_INTERMEDIATE,
+   RETRO_VR_HAND_JOINT_MIDDLE_DISTAL,
+   RETRO_VR_HAND_JOINT_MIDDLE_TIP,
+   RETRO_VR_HAND_JOINT_RING_METACARPAL,
+   RETRO_VR_HAND_JOINT_RING_PROXIMAL,
+   RETRO_VR_HAND_JOINT_RING_INTERMEDIATE,
+   RETRO_VR_HAND_JOINT_RING_DISTAL,
+   RETRO_VR_HAND_JOINT_RING_TIP,
+   RETRO_VR_HAND_JOINT_LITTLE_METACARPAL,
+   RETRO_VR_HAND_JOINT_LITTLE_PROXIMAL,
+   RETRO_VR_HAND_JOINT_LITTLE_INTERMEDIATE,
+   RETRO_VR_HAND_JOINT_LITTLE_DISTAL,
+   RETRO_VR_HAND_JOINT_LITTLE_TIP,
+   RETRO_VR_HAND_JOINT_COUNT,
+
+   /** @private Defined to ensure <tt>sizeof(retro_vr_hand_joint) == sizeof(int)</tt>. Do not use. */
+   RETRO_VR_HAND_JOINT_DUMMY = INT_MAX
+};
+
+/** One joint: its pose, and the distance from it to the skin in meters
+ * (0 when unknown). */
+struct retro_vr_hand_joint_state
+{
+   struct retro_vr_pose pose;
+   float radius;
+};
+
+/* Flags of retro_vr_hand_state. */
+/** Something is in the hand: a controller or a tracked hand. Without
+ * it the rest of the hand's state is cleared. */
+#define RETRO_VR_HAND_ACTIVE            (1u << 0)
+/** The joints are filled: the frontend tracks this hand's joints now. */
+#define RETRO_VR_HAND_JOINTS            (1u << 1)
+/** The joints are seen by the headset, the hand bare. */
+#define RETRO_VR_HAND_JOINTS_OPTICAL    (1u << 2)
+/** The joints are estimated from a held controller's grip and touch
+ * sensors. With neither JOINTS_ source bit, the source is unknown. */
+#define RETRO_VR_HAND_JOINTS_CONTROLLER (1u << 3)
+
+/** One hand. */
+struct retro_vr_hand_state
+{
+   /** The OpenXR interaction profile path the hand is used through,
+    * such as "/interaction_profiles/oculus/touch_controller"; NULL when
+    * none is known. The string is the frontend's, valid until the next
+    * RETRO_ENVIRONMENT_GET_VR_CONTROLLER_POSES call or until
+    * retro_run() returns, whichever comes first. */
+   const char *interaction_profile;
+
+   /** RETRO_VR_HAND_ flags. */
+   uint32_t flags;
+
+   struct retro_vr_pose grip;
+   struct retro_vr_pose aim;
+   struct retro_vr_pose palm;
+
+   /** Valid while RETRO_VR_HAND_JOINTS is set, each joint by its own
+    * pose flags. */
+   struct retro_vr_hand_joint_state joints[RETRO_VR_HAND_JOINT_COUNT];
+};
+
+/** The argument of RETRO_ENVIRONMENT_GET_VR_CONTROLLER_POSES. */
+struct retro_vr_controller_poses
+{
+   /** Indexed by enum retro_vr_hand. */
+   struct retro_vr_hand_state hands[RETRO_VR_HAND_COUNT];
 };
 
 /* Speaker positions, as bits of a layout mask; a frame's channels are
@@ -4098,7 +4285,10 @@ enum retro_hw_render_interface_type
     */
    RETRO_HW_RENDER_INTERFACE_VULKAN     = 0,
 
-   /** Indicates a \c retro_hw_render_interface for Direct3D 9. */
+   /**
+    * Indicates a \c retro_hw_render_interface for Direct3D 9.
+    * @see retro_hw_render_interface_d3d9
+    */
    RETRO_HW_RENDER_INTERFACE_D3D9       = 1,
 
    /** Indicates a \c retro_hw_render_interface for Direct3D 10. */
@@ -5667,10 +5857,61 @@ enum retro_camera_buffer
    RETRO_CAMERA_BUFFER_RAW_FRAMEBUFFER,
 
    /**
+    * Indicates that camera frames should be delivered to the core as
+    * the planar 4:2:0 YCbCr the capture device produces, in place.
+    *
+    * No conversion happens between the device and the core: the planes
+    * are the capture buffer itself. A core that can sample or convert
+    * YCbCr should prefer this over \c RETRO_CAMERA_BUFFER_RAW_FRAMEBUFFER,
+    * which costs the frontend a conversion pass per frame.
+    *
+    * @see retro_camera_frame_planar_t
+    */
+   RETRO_CAMERA_BUFFER_PLANAR,
+
+   /**
     * @private Defined to ensure <tt>sizeof(enum retro_camera_buffer) == sizeof(int)</tt>.
     * Do not use.
     */
    RETRO_CAMERA_BUFFER_DUMMY = INT_MAX
+};
+
+/** The luma plane is full range (0..255) rather than limited (16..235). */
+#define RETRO_CAMERA_PLANAR_FULL_RANGE (1 << 0)
+/** BT.709 matrix rather than BT.601. */
+#define RETRO_CAMERA_PLANAR_BT709      (1 << 1)
+
+/**
+ * One 8-bit 4:2:0 YCbCr frame, as planes.
+ *
+ * Covers NV12, NV21 and I420 without a format tag: the chroma planes
+ * are addressed by their own base pointers and a common sample step,
+ * so NV12 is <tt>planes[2] == planes[1] + 1</tt> with \c chroma_step 2,
+ * NV21 the other way round, and I420 two separate planes with
+ * \c chroma_step 1. Row pairs share a chroma row.
+ *
+ * @see RETRO_CAMERA_BUFFER_PLANAR
+ */
+struct retro_camera_planar_frame
+{
+   /** Y, Cb, Cr. Owned by the frontend, read-only, valid for the duration of the callback. */
+   const uint8_t *planes[3];
+
+   /** Row strides of the three planes, in bytes. */
+   size_t strides[3];
+
+   /** Distance between horizontally adjacent chroma samples of one plane, in bytes: 1 or 2. */
+   size_t chroma_step;
+
+   /** Frame size in luma pixels. */
+   unsigned width;
+   unsigned height;
+
+   /** Degrees the frame must be rotated clockwise to be upright: 0, 90, 180 or 270. */
+   unsigned rotation;
+
+   /** \c RETRO_CAMERA_PLANAR_* bits. */
+   unsigned flags;
 };
 
 /**
@@ -5752,6 +5993,17 @@ typedef void (RETRO_CALLCONV *retro_camera_frame_opengl_texture_t)(unsigned text
       unsigned texture_target, const float *affine);
 
 /**
+ * Called by the frontend to report a new camera frame,
+ * delivered as the capture device's own planar YCbCr buffer.
+ *
+ * @param frame The frame. Its planes may be invalidated when this function returns,
+ * so the core should make its own copy if necessary.
+ * @see RETRO_CAMERA_BUFFER_PLANAR
+ */
+typedef void (RETRO_CALLCONV *retro_camera_frame_planar_t)(
+      const struct retro_camera_planar_frame *frame);
+
+/**
  * An interface that the core can use to access a device's camera.
  *
  * @see RETRO_ENVIRONMENT_GET_CAMERA_INTERFACE
@@ -5826,6 +6078,15 @@ struct retro_camera_callback
     * May be \c NULL, in which case this function is skipped.
     */
    retro_camera_lifetime_status_t deinitialized;
+
+   /**
+    * @copydoc retro_camera_frame_planar_t
+    * @note Read by the frontend only when \c caps has the
+    * \c RETRO_CAMERA_BUFFER_PLANAR bit, so a core built against an
+    * older header, whose struct ends above, is never read past.
+    * If \c NULL, this function will not be called.
+    */
+   retro_camera_frame_planar_t frame_planar;
 };
 
 /** @} */

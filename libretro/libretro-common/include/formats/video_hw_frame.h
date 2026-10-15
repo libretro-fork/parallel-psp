@@ -28,12 +28,22 @@
  * Handles are given as their bytes (a Vulkan non-dispatchable handle
  * is 64 bits wide on every target).
  *
- * Vulkan: a VkImage of VK_FORMAT_G8_B8R8_2PLANE_420_UNORM in @layout,
+ * Vulkan: an NV12/P010 VkImage in @layout,
  * and two timeline semaphores. A reader waits for @wait to reach
  * @wait_value before it reads, and signals @done with @done_value once
  * it reads the frame no more: until then the decoder does not write
  * the image again. A frame that will never be read is given back with
- * video_hw_frame_abandon, which signals @done in the reader's place. */
+ * video_hw_frame_abandon, which signals @done in the reader's place.
+ * Optional @plane_views are Y/UV VkImageViews in R8/R8G8 or R16/R16G16
+ * UNORM format. Both are nonzero or both zero and share the image's lease.
+ * A view selects @array_slice; @crop_x/@crop_y locate the visible window.
+ *
+ * D3D11: NT handles of a shared DXGI_FORMAT_NV12 or P010 texture and of two
+ * shared ID3D11Fences, used as above; @layout names the decoder's set
+ * of handles, so that a reader keeping what it opened of them opens
+ * them again when it changes. D3D12 readers may receive a decoder array:
+ * @array_slice selects its element and @crop_x/@crop_y its visible origin.
+ * These fields are zero for standalone output textures. */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -46,6 +56,7 @@ RETRO_BEGIN_DECLS
 typedef struct video_hw_frame
 {
    uint64_t image;
+   uint64_t plane_views[2]; /* optional Vulkan Y/UV views; same lease */
    uint64_t wait;
    uint64_t wait_value;
    uint64_t done;
@@ -56,6 +67,9 @@ typedef struct video_hw_frame
    unsigned width, height;
    unsigned layout;
    unsigned yuv;             /* IMAGE_YUV_FLAG_* (image_yuv_blit.h) */
+   unsigned pixfmt;          /* image_pixfmt; zero means legacy NV12 */
+   unsigned array_slice;    /* D3D12: shared decoder array element */
+   unsigned crop_x, crop_y; /* visible origin within that element */
 } video_hw_frame_t;
 
 static INLINE void video_hw_frame_abandon(const video_hw_frame_t *f)

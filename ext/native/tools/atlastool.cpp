@@ -2,12 +2,7 @@
 // For license safety, just run this as a build tool, don't build it into your game/program.
 // https://github.com/zorbathut/glorp
 
-// Horrible build instructions:
-// * Download freetype, put in ppsspp/ext as freetype/
-// * Open tools.sln
-// * In Code Generation on freetype, change from Multithreaded DLL to Multithreaded.
-// * Build
-// * Move exe file to ext/native/tools/build
+// Build with the system FreeType development package installed.
 
 // data we need to provide:
 // sx, sy
@@ -25,13 +20,8 @@
 #include <vector>
 #include <map>
 #include <string>
-#ifdef SYSTEM_FREETYPE
-#include <freetype2/ft2build.h>
-#include <freetype2/freetype/ftbitmap.h>
-#else
-#include "ft2build.h"
-#include "freetype/ftbitmap.h"
-#endif
+#include <ft2build.h>
+#include <freetype/ftbitmap.h>
 #include "zstd.h"
 
 #include "Common/Render/AtlasGen.h"

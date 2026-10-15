@@ -152,7 +152,6 @@ option(SIMULATOR "Set to ON when targeting an x86 simulator of an ARM platform" 
 # :: Options
 option(USE_LIBNX "Set to ON to build for Switch(libnx)" OFF)
 option(USE_SYSTEM_SNAPPY "Dynamically link against system snappy" ${USE_SYSTEM_SNAPPY})
-option(USE_SYSTEM_FREETYPE "Dynamically link against system freetype" ${USE_SYSTEM_FREETYPE})
 option(USE_SYSTEM_RAPIDJSON "Build using system rapidjson" ${USE_SYSTEM_RAPIDJSON})
 option(USE_ASAN "Use address sanitizer" OFF)
 option(USE_UBSAN "Use undefined behaviour sanitizer" OFF)
@@ -674,19 +673,13 @@ if(UNITTEST)
 endif()
 
 if(ATLAS_TOOL)
-	if(USE_SYSTEM_FREETYPE)
-		find_package(Freetype REQUIRED)
-		include_directories(${FREETYPE_INCLUDE_DIRS})
-		add_compile_definitions(SYSTEM_FREETYPE)
-	else()
-		include_directories(ext/freetype/include)
-	endif()
+	find_package(Freetype REQUIRED)
 
 	set(AtlasToolSource
 		ext/native/tools/atlastool.cpp
 	)
 	add_executable(AtlasTool ${AtlasToolSource})
-	target_link_libraries(AtlasTool ${CMAKE_THREAD_LIBS_INIT} freetype)
+	target_link_libraries(AtlasTool ${CMAKE_THREAD_LIBS_INIT} Freetype::Freetype)
 	setup_target_project(AtlasTool atlastool)
 endif()
 

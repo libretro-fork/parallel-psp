@@ -153,6 +153,9 @@ add_library(Common STATIC
 	GPU/thin3d.h
 	GPU/thin3d_create.h
 	GPU/Shader.cpp
+	GPU/Vulkan/BuiltinVulkanShaders.cpp
+	GPU/Vulkan/BuiltinVulkanShaders.h
+	GPU/Vulkan/BuiltinShaders.inl
 	GPU/Shader.h
 	GPU/ShaderWriter.cpp
 	GPU/ShaderWriter.h

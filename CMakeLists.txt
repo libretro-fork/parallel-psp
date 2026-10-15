@@ -609,6 +609,7 @@ if(UNITTEST)
 	add_executable(PPSSPPUnitTest
 		unittest/UnitTest.cpp
 		unittest/TestShaderGenerators.cpp
+		unittest/TestBuiltinVulkanShaders.cpp
 		unittest/TestArmEmitter.cpp
 		unittest/TestArm64Emitter.cpp
 		unittest/TestCrossSIMD.cpp
@@ -664,6 +665,7 @@ if(UNITTEST)
 	add_test(quick_texhash PPSSPPUnitTest QuickTexHash)
 	add_test(clz PPSSPPUnitTest CLZ)
 	add_test(shadergen PPSSPPUnitTest ShaderGenerators)
+	add_test(builtin_vulkan_shaders PPSSPPUnitTest BuiltinVulkanShaders)
 endif()
 
 if(ATLAS_TOOL)

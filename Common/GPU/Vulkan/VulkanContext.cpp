@@ -13,6 +13,7 @@
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanDebug.h"
 #include "Common/GPU/Vulkan/FixedSPIRVCache.h"
+#include "Common/GPU/Vulkan/BuiltinVulkanShaders.h"
 #include "Common/StringUtils.h"
 #include "Common/File/FileUtil.h"
 #include "ext/xxhash.h"
@@ -1766,6 +1767,10 @@ void SPIRVCache::SaveIfDirty() {
 
 bool GLSLtoSPV(const VkShaderStageFlagBits shader_type, const char *sourceCode, GLSLVariant variant,
 			   std::vector<unsigned int> &spirv, std::string *errorMessage, SPIRVCache *cache) {
+	errorMessage->clear();
+	if (variant == GLSLVariant::VULKAN && LookupBuiltinVulkanShader(shader_type, sourceCode, spirv)) {
+		return true;
+	}
 	if (cache && cache->Lookup(shader_type, variant, sourceCode, &spirv)) {
 		return true;
 	}

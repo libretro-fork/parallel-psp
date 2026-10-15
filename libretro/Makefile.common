@@ -721,7 +721,8 @@ SOURCES_C += $(LIBRETROCOMMONDIR)/compat/compat_posix_string.c \
              $(LIBRETROCOMMONDIR)/string/rstrtod.c \
              $(LIBRETROCOMMONDIR)/vfs/vfs_implementation.c
 
-# Codecs: zlib-format deflate, zstd, CHD, zip and PNG.
+# Codecs: zlib-format deflate, zstd, CHD (including rlzma), zip and PNG.
+# HAVE_RCHD_LZMA enables the CHD consumer; rlzma needs no separate define.
 COREFLAGS += -DHAVE_THREADS -DHAVE_RZSTD -DHAVE_RFLAC -DHAVE_RCHD_DEFLATE -DHAVE_RCHD_LZMA -DHAVE_RCHD_FLAC -DHAVE_RCHD_ZSTD
 SOURCES_C += $(LIBRETROCOMMONDIR)/encodings/encoding_crc32.c \
              $(LIBRETROCOMMONDIR)/encodings/encoding_deflate.c \

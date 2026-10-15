@@ -634,7 +634,6 @@ static const ConfigSetting graphicsSettings[] = {
 	ConfigSetting("HighQualityDepth", SETTING(g_Config, bHighQualityDepth), true, CfgFlag::PER_GAME),
 	ConfigSetting("FrameSkip", SETTING(g_Config, iFrameSkip), 0, CfgFlag::PER_GAME),
 	ConfigSetting("StereoRendering", SETTING(g_Config, bStereoRendering), false, CfgFlag::PER_GAME),
-	ConfigSetting("StereoToMonoShader", SETTING(g_Config, sStereoToMonoShader), "RedBlue", CfgFlag::PER_GAME),
 
 	// Most low-performance (and many high performance) mobile GPUs do not support aniso anyway so defaulting to 4 is fine.
 	ConfigSetting("AnisotropyLevel", SETTING(g_Config, iAnisotropyLevel), 4, CfgFlag::PER_GAME),
@@ -1193,40 +1192,9 @@ void Config::Load(const char *iniFileName, const char *controllerIniFilename) {
 	}
 
 	// Default values for post process shaders
-	bool postShadersInitialized = iniFile.HasSection("PostShaderList");
-	Section *postShaderChain = iniFile.GetOrCreateSection("PostShaderList");
-	Section *postShaderSetting = iniFile.GetOrCreateSection("PostShaderSetting");
-	if (IsVREnabled() && !postShadersInitialized) {
-		postShaderChain->Set("PostShader1", "ColorCorrection");
-		postShaderSetting->Set("ColorCorrectionSettingCurrentValue1", 1.0f);
-		postShaderSetting->Set("ColorCorrectionSettingCurrentValue2", 1.5f);
-		postShaderSetting->Set("ColorCorrectionSettingCurrentValue3", 1.1f);
-		postShaderSetting->Set("ColorCorrectionSettingCurrentValue4", 1.0f);
-	}
-
-	// Load post process shader values
-	mPostShaderSetting.clear();
-	for (const auto &[key, value] : postShaderSetting->ToMap()) {
-		// The ini is user-editable, and std::stof throws - which would take the process down
-		// during startup config load. LoadGameConfig already parses this section this way.
-		float f = 0.0f;
-		if (sscanf(value.c_str(), "%f", &f) == 1) {
-			mPostShaderSetting[key] = f;
-		} else {
-			WARN_LOG(Log::Config, "Invalid float value string for param %s: '%s'", key.c_str(), value.c_str());
-		}
-	}
-
 	const Section *hostOverrideSetting = iniFile.GetOrCreateSection("HostAliases");
 	// TODO: relocate me before PR
 	mHostToAlias = hostOverrideSetting->ToMap();
-
-	// Load post process shader names
-	vPostShaderNames.clear();
-	for (const auto& it : postShaderChain->ToMap()) {
-		if (it.second != "Off")
-			vPostShaderNames.push_back(it.second);
-	}
 
 	// Force JIT setting to a valid value for the current system configuration.
 	if (!System_GetPropertyBool(SYSPROP_CAN_JIT)) {
@@ -1307,23 +1275,6 @@ bool Config::Save(const char *saveReason) {
 			char keyName[64];
 			snprintf(keyName, sizeof(keyName), "Path%d", (int)i);
 			pinnedPaths->Set(keyName, vPinnedPaths[i]);
-		}
-
-		if (!IsGameSpecific()) {
-			// These settings can be game specific, and so are handled in SaveGameConfig().
-
-			Section *postShaderSetting = iniFile.GetOrCreateSection("PostShaderSetting");
-			postShaderSetting->Clear();
-			for (const auto &[k, v] : mPostShaderSetting) {
-				postShaderSetting->Set(k, v);
-			}
-			Section *postShaderChain = iniFile.GetOrCreateSection("PostShaderList");
-			postShaderChain->Clear();
-			for (size_t i = 0; i < vPostShaderNames.size(); ++i) {
-				char keyName[64];
-				snprintf(keyName, sizeof(keyName), "PostShader%d", (int)i+1);
-				postShaderChain->Set(keyName, vPostShaderNames[i]);
-			}
 		}
 
 		// TODO: relocate me before PR
@@ -1559,20 +1510,6 @@ bool Config::SaveGameConfig(const std::string &gameId, std::string_view titleFor
 		}
 	}
 
-	Section *postShaderSetting = iniFile.GetOrCreateSection("PostShaderSetting");
-	postShaderSetting->Clear();
-	for (const auto &[k, v] : mPostShaderSetting) {
-		postShaderSetting->Set(k, v);
-	}
-
-	Section *postShaderChain = iniFile.GetOrCreateSection("PostShaderList");
-	postShaderChain->Clear();
-	for (size_t i = 0; i < vPostShaderNames.size(); ++i) {
-		char keyName[64];
-		snprintf(keyName, sizeof(keyName), "PostShader%d", (int)i+1);
-		postShaderChain->Set(keyName, vPostShaderNames[i]);
-	}
-
 	KeyMap::SaveToIni(iniFile);
 	iniFile.Save(fullIniFilePath);
 
@@ -1599,24 +1536,6 @@ bool Config::LoadGameConfig(const std::string &gameId) {
 
 	IniFile iniFile;
 	iniFile.Load(iniFileNameFull);
-
-	auto postShaderSetting = iniFile.GetOrCreateSection("PostShaderSetting")->ToMap();
-	mPostShaderSetting.clear();
-	for (const auto &[k, v] : postShaderSetting) {
-		float value = 0.0f;
-		if (sscanf(v.c_str(), "%f", &value)) {
-			mPostShaderSetting[k] = value;
-		} else {
-			WARN_LOG(Log::Config, "Invalid float value string for param %s: '%s'", k.c_str(), v.c_str());
-		}
-	}
-
-	auto postShaderChain = iniFile.GetOrCreateSection("PostShaderList")->ToMap();
-	vPostShaderNames.clear();
-	for (const auto &[_, v] : postShaderChain) {
-		if (v != "Off")
-			vPostShaderNames.push_back(v);
-	}
 
 	for (const ConfigSectionMeta &meta : g_sectionMeta) {
 		Section *section = iniFile.GetSection(meta.section);
@@ -1659,24 +1578,6 @@ void Config::UnloadGameConfig() {
 	iniFile.Load(iniFilename_);
 
 	ReadAllSettings(iniFile);
-
-	auto postShaderSetting = iniFile.GetOrCreateSection("PostShaderSetting")->ToMap();
-	mPostShaderSetting.clear();
-	for (const auto &[k, v] : postShaderSetting) {
-		float f = 0.0f;
-		if (sscanf(v.c_str(), "%f", &f) == 1) {
-			mPostShaderSetting[k] = f;
-		} else {
-			WARN_LOG(Log::Config, "Invalid float value string for param %s: '%s'", k.c_str(), v.c_str());
-		}
-	}
-
-	auto postShaderChain = iniFile.GetOrCreateSection("PostShaderList")->ToMap();
-	vPostShaderNames.clear();
-	for (const auto &[k, v] : postShaderChain) {
-		if (v != "Off")
-			vPostShaderNames.push_back(v);
-	}
 
 	LoadStandardControllerIni();
 	PostLoadCleanup();

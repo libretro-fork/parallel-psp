@@ -27,7 +27,6 @@ FramebufferManagerGLES::FramebufferManagerGLES(Draw::DrawContext *draw) :
 	FramebufferManagerCommon(draw)
 {
 	needBackBufferYSwap_ = true;
-	presentation_->SetLanguage(draw_->GetShaderLanguageDesc().shaderLanguage);
 }
 
 void FramebufferManagerGLES::UpdateDownloadTempBuffer(VirtualFramebuffer *nvfb) {

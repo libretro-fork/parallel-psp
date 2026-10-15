@@ -84,6 +84,8 @@ set(GPU_SOURCES
 	Common/DepthBufferCommon.cpp
 	Common/DepthRaster.cpp
 	Common/DepthRaster.h
+	Common/TextureShaderInfo.cpp
+	Common/TextureShaderInfo.h
 	Common/TextureShaderCommon.cpp
 	Common/TextureShaderCommon.h
 	Common/DepalettizeShaderCommon.cpp
@@ -132,8 +134,6 @@ set(GPU_SOURCES
 	Common/TextureCacheCommon.h
 	Common/TextureScalerCommon.cpp
 	Common/TextureScalerCommon.h
-	Common/PostShader.cpp
-	Common/PostShader.h
 	Common/TextureReplacer.cpp
 	Common/TextureReplacer.h
 	Common/ReplacedTexture.cpp

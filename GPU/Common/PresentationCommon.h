@@ -29,17 +29,6 @@ struct CardboardSettings {
 	float screenHeight;
 };
 
-struct PostShaderUniforms {
-	float texelDelta[2]; float pixelDelta[2];
-	float time[4];
-	float timeDelta[4];
-	float setting[4];
-	float video; float pad[3];
-	float vr;
-	// Used on Direct3D9.
-	float gl_HalfPixel[4];
-};
-
 struct FRect {
 	float x;
 	float y;
@@ -65,7 +54,6 @@ class ShaderModule;
 class Texture;
 }
 
-struct ShaderInfo;
 class TextureCacheCommon;
 
 enum class OutputFlags {
@@ -75,7 +63,6 @@ enum class OutputFlags {
 	RB_SWIZZLE = 0x0002,
 	BACKBUFFER_FLIPPED = 0x0004,  // Viewport/scissor coordinates are y-flipped.
 	PILLARBOX = 0x0010,           // Squeeze the image horizontally. Used for the DarkStalkers hack.
-	NO_POST_SHADER = 0x0020,      // Draw straight to the bound target, as post shaders would need to bind their own.
 };
 ENUM_CLASS_BITOPS(OutputFlags);
 
@@ -96,21 +83,7 @@ public:
 		renderWidth_ = rw;
 		renderHeight_ = rh;
 	}
-	void SetLanguage(ShaderLanguage lang) {
-		lang_ = lang;
-	}
-
-	bool HasPostShader() {
-		return usePostShader_;
-	}
-
-	bool UpdatePostShader(const DisplayLayoutConfig &config);
-
 	void BeginFrame(const DisplayLayoutConfig &config) {
-		if (restorePostShader_) {
-			UpdatePostShader(config);
-			restorePostShader_ = false;
-		}
 		presentedThisFrame_ = false;
 	}
 	bool PresentedThisFrame() const {
@@ -125,37 +98,25 @@ public:
 	void DeviceLost();
 	void DeviceRestore(Draw::DrawContext *draw);
 
-	void UpdateUniforms(bool hasVideo);
-
 	// One of these must be called every frame.
 	void SourceBlank();
 	void SourceTexture(Draw::Texture *texture, int bufferWidth, int bufferHeight);
 	void SourceFramebuffer(Draw::Framebuffer *fb, int bufferWidth, int bufferHeight);
 
-	void RunPostshaderPasses(const DisplayLayoutConfig &config, OutputFlags flags, int uvRotation, float u0, float v0, float u1, float v1);
+	void PrepareOutput(const DisplayLayoutConfig &config, OutputFlags flags, int uvRotation, float u0, float v0, float u1, float v1);
 	void CopyToOutput(const DisplayLayoutConfig &config);
 
-	void CalculateRenderResolution(const DisplayLayoutConfig &config, int *width, int *height, int *scaleFactor, bool *upscaling, bool *ssaa) const;
+	void CalculateRenderResolution(const DisplayLayoutConfig &config, int *width, int *height, int *scaleFactor) const;
 
 protected:
 	void CreateDeviceObjects();
 	void DestroyDeviceObjects();
 
-	void DestroyPostShader();
-	void DestroyStereoShader();
+	void BindSource(int binding);
 
-	static void ShowPostShaderError(const std::string &errorString);
-
-	Draw::ShaderModule *CompileShaderModule(ShaderStage stage, ShaderLanguage lang, const std::string &src, std::string *errorString) const;
-	Draw::Pipeline *CreatePipeline(std::vector<Draw::ShaderModule *> shaders, bool postShader, const UniformBufferDesc *uniformDesc) const;
-	bool CompilePostShader(const ShaderInfo *shaderInfo, Draw::Pipeline **outPipeline) const;
-	bool BuildPostShader(const DisplayLayoutConfig &config, const ShaderInfo *shaderInfo, const ShaderInfo *next, Draw::Pipeline **outPipeline);
-	bool AllocateFramebuffer(int w, int h);
-
-	bool BindSource(int binding, bool bindStereo);
+	Draw::Pipeline *CreatePipeline(std::vector<Draw::ShaderModule *> shaders, const UniformBufferDesc *uniformDesc) const;
 
 	void GetCardboardSettings(const DisplayLayoutConfig &config, CardboardSettings *cardboardSettings) const;
-	void CalculatePostShaderUniforms(int bufferWidth, int bufferHeight, int targetWidth, int targetHeight, const ShaderInfo *shaderInfo, PostShaderUniforms *uniforms) const;
 
 	Draw::DrawContext *draw_;
 	Draw::Pipeline *texColor_ = nullptr;
@@ -164,42 +125,18 @@ protected:
 	Draw::SamplerState *samplerLinear_ = nullptr;
 	Draw::Buffer *vdata_ = nullptr;
 
-	std::vector<Draw::Pipeline *> postShaderPipelines_;
-	std::vector<Draw::Framebuffer *> postShaderFramebuffers_;
-	std::vector<ShaderInfo> postShaderInfo_;
-	std::vector<Draw::Framebuffer *> previousFramebuffers_;
-	
-	Draw::Pipeline *stereoPipeline_ = nullptr;
-	ShaderInfo *stereoShaderInfo_ = nullptr;
-
-	int previousIndex_ = 0;
-	PostShaderUniforms previousUniforms_{};
-
 	Draw::Texture *srcTexture_ = nullptr;
 	Draw::Framebuffer *srcFramebuffer_ = nullptr;
 	int srcWidth_ = 0;
 	int srcHeight_ = 0;
-	bool hasVideo_ = false;
 
 	int pixelWidth_ = 0;
 	int pixelHeight_ = 0;
 	int renderWidth_ = 0;
 	int renderHeight_ = 0;
 
-	bool usePostShader_ = false;
-	bool restorePostShader_ = false;
 	bool presentedThisFrame_ = false;
-	ShaderLanguage lang_;
 
-	struct PrevFBO {
-		Draw::Framebuffer *fbo;
-		int w;
-		int h;
-	};
-	std::vector<PrevFBO> postShaderFBOUsage_;
-
-	// Carry over info between RunPostShaderPasses and CopyToOutput.
-	Draw::Framebuffer *postShaderOutput_ = nullptr;
 	FRect rc_;
 	OutputFlags outputFlags_ = OutputFlags::DEFAULT;
 };

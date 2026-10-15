@@ -447,9 +447,7 @@ public:
 
 	void NotifyRenderResized(const DisplayLayoutConfig &config, int msaaLevel);
 	virtual void NotifyDisplayResized();
-	void NotifyConfigChanged();
 
-	void CheckPostShaders(const DisplayLayoutConfig &config);
 
 	virtual void DestroyAllFBOs();
 
@@ -606,8 +604,6 @@ protected:
 	u32 framebufColorRangeEnd_ = 0;
 
 	bool useBufferedRendering_ = false;
-	bool postShaderIsUpscalingFilter_ = false;
-	bool postShaderIsSupersampling_ = false;
 
 	std::vector<VirtualFramebuffer *> vfbs_;
 	std::vector<VirtualFramebuffer *> bvfbs_; // blitting framebuffers (for download)
@@ -625,7 +621,6 @@ protected:
 	int pixelWidth_ = 0;
 	int pixelHeight_ = 0;
 	int bloomHack_ = 0;
-	bool updatePostShaders_ = false;
 
 	struct TempFBOInfo {
 		Draw::Framebuffer *fbo;

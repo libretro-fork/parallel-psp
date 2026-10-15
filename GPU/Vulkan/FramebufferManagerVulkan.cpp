@@ -20,5 +20,4 @@
 
 FramebufferManagerVulkan::FramebufferManagerVulkan(Draw::DrawContext *draw) :
 	FramebufferManagerCommon(draw) {
-	presentation_->SetLanguage(GLSL_VULKAN);
 }

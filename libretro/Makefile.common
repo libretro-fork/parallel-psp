@@ -136,7 +136,6 @@ SOURCES_CXX += \
 	$(COMMONDIR)/GPU/Shader.cpp \
 	$(COMMONDIR)/GPU/GPUBackendCommon.cpp \
 	$(COMMONDIR)/GPU/ShaderWriter.cpp \
-	$(COMMONDIR)/GPU/ShaderTranslation.cpp \
 	$(COMMONDIR)/GPU/OpenGL/thin3d_gl.cpp \
 	$(COMMONDIR)/GPU/OpenGL/GLDebugLog.cpp \
 	$(COMMONDIR)/GPU/OpenGL/GLSLProgram.cpp \
@@ -229,12 +228,12 @@ SOURCES_CXX += \
 	$(GPUCOMMONDIR)/ShaderCommon.cpp \
 	$(GPUCOMMONDIR)/ShaderUniforms.cpp \
 	$(GPUCOMMONDIR)/GPUDebugInterface.cpp \
+	$(GPUCOMMONDIR)/TextureShaderInfo.cpp \
 	$(GPUCOMMONDIR)/TextureShaderCommon.cpp \
 	$(GPUCOMMONDIR)/DepalettizeShaderCommon.cpp \
 	$(GPUCOMMONDIR)/TransformCommon.cpp \
 	$(GPUCOMMONDIR)/IndexGenerator.cpp \
 	$(GPUCOMMONDIR)/TextureDecoder.cpp \
-	$(GPUCOMMONDIR)/PostShader.cpp \
 	$(GPUCOMMONDIR)/TextureReplacer.cpp \
 	$(GPUCOMMONDIR)/ReplacedTexture.cpp \
 	$(COMMONDIR)/Data/Convert/ColorConv.cpp \
@@ -314,14 +313,7 @@ SOURCES_CXX += \
 	$(EXTDIR)/glslang/SPIRV/GlslangToSpv.cpp \
 	$(EXTDIR)/glslang/SPIRV/Logger.cpp \
 	$(EXTDIR)/glslang/SPIRV/SpvBuilder.cpp \
-	$(EXTDIR)/glslang/SPIRV/SpvPostProcess.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_cfg.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_cross.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_cross_util.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_glsl.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_hlsl.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_parser.cpp \
-	$(EXTDIR)/SPIRV-Cross/spirv_cross_parsed_ir.cpp
+	$(EXTDIR)/glslang/SPIRV/SpvPostProcess.cpp
 
 ifeq ($(PLATFORM_EXT), win32)
 SOURCES_CXX += $(COMMONDIR)/MemArenaWin32.cpp \

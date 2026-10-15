@@ -305,13 +305,10 @@ public:
 	int iScreenshotMode;
 	bool bVulkanDisableImplicitLayers;
 
-	std::vector<std::string> vPostShaderNames; // Off for chain end (only Off for no shader)
-	std::map<std::string, float> mPostShaderSetting;
 
 	// Note that this is separate from VR stereo, though it'll share some code paths.
 	bool bStereoRendering;
 	// There can only be one, unlike regular post shaders.
-	std::string sStereoToMonoShader;
 
 	bool bShaderChainRequires60FPS;
 	std::string sTextureShaderName;

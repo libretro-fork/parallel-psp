@@ -24,5 +24,4 @@
 
 FramebufferManagerDX9::FramebufferManagerDX9(Draw::DrawContext *draw)
 	: FramebufferManagerCommon(draw) {
-	presentation_->SetLanguage(HLSL_D3D9);
 }

@@ -412,7 +412,6 @@ void GPUCommonHW::CheckConfigChanged(const DisplayLayoutConfig &config) {
 		gstate_c.SetUseFlags(CheckGPUFeatures());
 		drawEngineCommon_->NotifyConfigChanged();
 		textureCache_->NotifyConfigChanged();
-		framebufferManager_->NotifyConfigChanged();
 		configChanged_ = false;
 	}
 }

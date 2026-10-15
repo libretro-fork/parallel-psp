@@ -56,7 +56,6 @@
 #include "GPU/GPUState.h"
 #include "GPU/GPUCommon.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "GPU/Common/PostShader.h"
 #include "GPU/Debugger/Record.h"
 
 struct FrameBufferState {

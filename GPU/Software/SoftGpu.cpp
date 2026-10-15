@@ -45,7 +45,6 @@
 #include "GPU/Software/TransformUnit.h"
 #include "GPU/Common/DrawEngineCommon.h"
 #include "GPU/Common/PresentationCommon.h"
-#include "Common/GPU/ShaderTranslation.h"
 #include "GPU/Common/SplineCommon.h"
 #include "GPU/Debugger/Record.h"
 
@@ -445,7 +444,6 @@ SoftGPU::SoftGPU(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 
 	if (gfxCtx && draw) {
 		presentation_ = new PresentationCommon(draw_);
-		presentation_->SetLanguage(draw_->GetShaderLanguageDesc().shaderLanguage);
 		presentation_->UpdateDisplaySize(PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
 		presentation_->UpdateRenderSize(PSP_CoreParameter().renderWidth, PSP_CoreParameter().renderHeight);
 	}
@@ -611,7 +609,6 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(const DisplayLayoutConfig &config, 
 	bool hasImage = true;
 
 	OutputFlags outputFlags = config.iDisplayFilter == SCALE_NEAREST ? OutputFlags::NEAREST : OutputFlags::LINEAR;
-	bool hasPostShader = presentation_ && presentation_->HasPostShader();
 
 	if (DarkStalkersStretchActive()) {
 		const u8 *data = Memory::GetPointerWriteOrException(DS_SOURCE_ADDR);
@@ -619,7 +616,7 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(const DisplayLayoutConfig &config, 
 		if (draw_->GetDataFormatSupport(Draw::DataFormat::A1B5G5R5_UNORM_PACK16) & Draw::FMT_TEXTURE) {
 			// The perfect one.
 			desc.format = Draw::DataFormat::A1B5G5R5_UNORM_PACK16;
-		} else if (!hasPostShader && (draw_->GetDataFormatSupport(Draw::DataFormat::A1R5G5B5_UNORM_PACK16) & Draw::FMT_TEXTURE)) {
+		} else if ((draw_->GetDataFormatSupport(Draw::DataFormat::A1R5G5B5_UNORM_PACK16) & Draw::FMT_TEXTURE)) {
 			// RB swapped, compensate with a shader.
 			desc.format = Draw::DataFormat::A1R5G5B5_UNORM_PACK16;
 			outputFlags |= OutputFlags::RB_SWIZZLE;
@@ -654,7 +651,7 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(const DisplayLayoutConfig &config, 
 		if (draw_->GetDataFormatSupport(Draw::DataFormat::A1B5G5R5_UNORM_PACK16) & Draw::FMT_TEXTURE) {
 			// The perfect one.
 			desc.format = Draw::DataFormat::A1B5G5R5_UNORM_PACK16;
-		} else if (!hasPostShader && (draw_->GetDataFormatSupport(Draw::DataFormat::A1R5G5B5_UNORM_PACK16) & Draw::FMT_TEXTURE)) {
+		} else if ((draw_->GetDataFormatSupport(Draw::DataFormat::A1R5G5B5_UNORM_PACK16) & Draw::FMT_TEXTURE)) {
 			// RB swapped, compensate with a shader.
 			desc.format = Draw::DataFormat::A1R5G5B5_UNORM_PACK16;
 			outputFlags |= OutputFlags::RB_SWIZZLE;
@@ -685,7 +682,7 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(const DisplayLayoutConfig &config, 
 	}
 
 	presentation_->SourceTexture(fbTex, desc.width, desc.height);
-	presentation_->RunPostshaderPasses(config, outputFlags, config.iInternalScreenRotation, u0, v0, u1, v1);
+	presentation_->PrepareOutput(config, outputFlags, config.iInternalScreenRotation, u0, v0, u1, v1);
 }
 
 void SoftGPU::PrepareCopyDisplayToOutput(const DisplayLayoutConfig &config) {
@@ -793,9 +790,6 @@ void SoftGPU::CheckDisplayResized() {
 void SoftGPU::CheckConfigChanged(const DisplayLayoutConfig &config) {
 	if (configChanged_) {
 		drawEngineCommon_->NotifyConfigChanged();
-		if (presentation_) {
-			presentation_->UpdatePostShader(config);
-		}
 		configChanged_ = false;
 	}
 }

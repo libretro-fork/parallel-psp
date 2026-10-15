@@ -553,15 +553,12 @@ if(ANDROID OR (LINUX AND ARM_DEVICE) OR (LINUX AND RISCV64) OR (LINUX AND LOONGA
 	set(ATOMIC_LIB atomic)
 endif()
 
-set(GlslangLibs glslang OGLCompiler OSDependent SPIRV spirv-cross-glsl)
+set(GlslangLibs glslang OGLCompiler OSDependent SPIRV)
 
 if (ENABLE_SPVREMAPPER)
 	list(APPEND GlslangLibs SPVRemapper)
 endif()
 
-if(WIN32)
-	list(APPEND GlslangLibs spirv-cross-hlsl)
-endif()
 
 add_subdirectory(Common)
 

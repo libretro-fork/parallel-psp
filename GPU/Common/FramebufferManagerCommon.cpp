@@ -108,13 +108,6 @@ bool FramebufferManagerCommon::UpdateRenderSize(int msaaLevel) {
 	return newRender || newSettings;
 }
 
-void FramebufferManagerCommon::CheckPostShaders(const DisplayLayoutConfig &config) {
-	if (updatePostShaders_) {
-		presentation_->UpdatePostShader(config);
-		updatePostShaders_ = false;
-	}
-}
-
 void FramebufferManagerCommon::BeginFrame(const DisplayLayoutConfig &config) {
 	DecimateFBOs();
 	presentation_->BeginFrame(config);
@@ -1545,7 +1538,7 @@ Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, G
 bool FramebufferManagerCommon::DrawFramebufferToOutput(const DisplayLayoutConfig &config, const u8 *srcPixels, int srcStride, GEBufferFormat srcPixelFormat) {
 	textureCache_->ForgetLastTexture();
 
-	// Upload exactly the displayed 480x272, so that filtering (and post shaders) clamp at the edge of the
+	// Upload exactly the displayed 480x272, so that filtering clamp at the edge of the
 	// image instead of pulling in what's past it in memory - often garbage, like when this is video.
 	Draw::Texture *pixelsTex = MakePixelTexture(srcPixels, srcPixelFormat, srcStride, 480, 272);
 	if (!pixelsTex) {
@@ -1557,17 +1550,12 @@ bool FramebufferManagerCommon::DrawFramebufferToOutput(const DisplayLayoutConfig
 	if (needBackBufferYSwap_) {
 		flags |= OutputFlags::BACKBUFFER_FLIPPED;
 	}
-	if (!useBufferedRendering_) {
-		// We're inside the backbuffer pass, where nothing else will draw this image.
-		flags |= OutputFlags::NO_POST_SHADER;
-	}
 
 	constexpr float u0 = 0.0f, u1 = 1.0f;
 	constexpr float v0 = 0.0f, v1 = 1.0f;
 
-	presentation_->UpdateUniforms(gpu->VideoIsPlaying());
 	presentation_->SourceTexture(pixelsTex, 480, 272);
-	presentation_->RunPostshaderPasses(config, flags, uvRotation, u0, v0, u1, v1);
+	presentation_->PrepareOutput(config, flags, uvRotation, u0, v0, u1, v1);
 	if (!useBufferedRendering_) {
 		presentation_->CopyToOutput(config);
 	}
@@ -1734,9 +1722,9 @@ void FramebufferManagerCommon::PrepareCopyDisplayToOutput(const DisplayLayoutCon
 
 		int actualWidth = (vfb->bufferWidth * vfb->renderWidth) / vfb->width;
 		int actualHeight = (vfb->bufferHeight * vfb->renderHeight) / vfb->height;
-		presentation_->UpdateUniforms(gpu->VideoIsPlaying());
+
 		presentation_->SourceFramebuffer(vfb->fbo, actualWidth, actualHeight);
-		presentation_->RunPostshaderPasses(config, flags, uvRotation, u0, v0, u1, v1);
+		presentation_->PrepareOutput(config, flags, uvRotation, u0, v0, u1, v1);
 	}
 }
 
@@ -2933,16 +2921,13 @@ void FramebufferManagerCommon::NotifyDisplayResized() {
 
 	INFO_LOG(Log::G3D, "FramebufferManagerCommon::NotifyDisplayResized: %dx%d", pixelWidth_, pixelHeight_);
 
-	// No drawing is allowed here. This includes anything that might potentially touch a command buffer, like creating images!
-	// So we need to defer the post processing initialization.
-	updatePostShaders_ = true;
 }
 
 void FramebufferManagerCommon::NotifyRenderResized(const DisplayLayoutConfig &config, int msaaLevel) {
 	gstate_c.skipDrawReason &= ~SKIPDRAW_NON_DISPLAYED_FB;
 
 	int w, h, scaleFactor;
-	presentation_->CalculateRenderResolution(config, &w, &h, &scaleFactor, &postShaderIsUpscalingFilter_, &postShaderIsSupersampling_);
+	presentation_->CalculateRenderResolution(config, &w, &h, &scaleFactor);
 	PSP_CoreParameter().renderWidth = w;
 	PSP_CoreParameter().renderHeight = h;
 	PSP_CoreParameter().renderScaleFactor = scaleFactor;
@@ -2953,13 +2938,6 @@ void FramebufferManagerCommon::NotifyRenderResized(const DisplayLayoutConfig &co
 		draw_->StartThreads();
 	}
 
-	// No drawing is allowed here. This includes anything that might potentially touch a command buffer, like creating images!
-	// So we need to defer the post processing initialization.
-	updatePostShaders_ = true;
-}
-
-void FramebufferManagerCommon::NotifyConfigChanged() {
-	updatePostShaders_ = true;
 }
 
 void FramebufferManagerCommon::DestroyAllFBOs() {

@@ -24,5 +24,4 @@
 
 FramebufferManagerD3D11::FramebufferManagerD3D11(Draw::DrawContext *draw)
 	: FramebufferManagerCommon(draw) {
-	presentation_->SetLanguage(HLSL_D3D11);
 }

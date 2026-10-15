@@ -40,7 +40,7 @@
 #include "GPU/GPUState.h"
 #include "GPU/GPUDefinitions.h"
 #include "GPU/Common/TextureShaderCommon.h"
-#include "GPU/Common/PostShader.h"
+#include "GPU/Common/TextureShaderInfo.h"
 #include "GPU/Common/TextureCacheCommon.h"
 #include "GPU/Common/TextureDecoder.h"
 #include "GPU/Vulkan/VulkanContext.h"
@@ -383,7 +383,7 @@ void TextureCacheVulkan::CompileScalingShader() {
 		return;
 	}
 
-	ReloadAllPostShaderInfo(draw_);
+	ReloadAllTextureShaderInfo(draw_);
 	const TextureShaderInfo *shaderInfo = GetTextureShaderInfo(g_Config.sTextureShaderName);
 	if (!shaderInfo || shaderInfo->computeShaderFiles.empty())
 		return;

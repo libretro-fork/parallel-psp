@@ -19,7 +19,6 @@ struct KeyInput;
 struct AxisInput;
 
 class GraphicsContext;
-class AudioBackend;
 
 enum class KeyModifier {
 	NONE = 0,
@@ -104,8 +103,6 @@ bool Native_IsWindowHidden();
 
 // TODO: Feels like this belongs elsewhere.
 bool Native_UpdateScreenScale(int width, int height, float customScale);
-
-AudioBackend *System_CreateAudioBackend();
 
 class NativeApplication : public Application {
 public:

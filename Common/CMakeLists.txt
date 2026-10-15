@@ -258,7 +258,6 @@ add_library(Common STATIC
 	Render/DrawBuffer.h
 	Render/Text/draw_text.cpp
 	Render/Text/draw_text.h
-	Audio/AudioBackend.h
 	System/Display.cpp
 	System/Display.h
 	System/Application.h

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 #include <functional>
@@ -67,6 +68,7 @@ public:
 	const char *Tag() const { return tag_.c_str(); }
 
 	GLuint handle = 0;
+	std::unique_ptr<GLDelayedReadback> delayedReadback;
 	GLRTexture color_texture;
 	// Either z_stencil_texture, z_stencil_buffer, or (z_buffer and stencil_buffer) are set.
 	GLuint z_stencil_buffer = 0;

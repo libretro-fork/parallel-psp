@@ -316,12 +316,45 @@ bool GLRenderManager::CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBit
 	step->readback.srcRect = { x, y, w, h };
 	step->readback.aspectMask = aspectBits;
 	step->readback.dstFormat = destFormat;
+	const bool allowDelayed = mode == Draw::ReadbackMode::OLD_DATA_OK && src && aspectBits == GL_COLOR_BUFFER_BIT &&
+		(gl_extensions.GLES3 || (!gl_extensions.IsGLES && gl_extensions.VersionGEThan(3, 2)));
+	GLDelayedReadback *delayed = nullptr;
+	bool cached = false;
+	if (allowDelayed && (!src->delayedReadback || !src->delayedReadback->disabled)) {
+		if (!src->delayedReadback) {
+			src->delayedReadback = std::make_unique<GLDelayedReadback>();
+		}
+		delayed = src->delayedReadback.get();
+		auto matches = [&](const GLRect2D &rect) {
+			return rect.x == x && rect.y == y && rect.w == w && rect.h == h;
+		};
+		cached = !delayed->cachedPixels.empty() && matches(delayed->cachedRect);
+		if (auto result = delayed->Take()) {
+			if (result->pixels.empty()) {
+				delayed->disabled = true;
+				cached = false;
+			} else if (cached && matches(result->rect)) {
+				delayed->cachedPixels = std::move(result->pixels);
+			}
+		}
+	}
+	step->readback.delayed = cached;
 	step->dependencies.insert(src);
 	step->tag = tag;
 	steps_.push_back(step);
 
 	curRenderStep_ = nullptr;
+	if (cached) {
+		Draw::ConvertFromRGBA8888(pixels, delayed->cachedPixels.data(), pixelStride, w, w, h, destFormat);
+		return true;
+	}
 	FlushSync();
+	if (delayed) {
+		delayed->cachedRect = {x, y, w, h};
+		delayed->cachedPixels.resize((size_t)w * h * 4);
+		queueRunner_.CopyFromReadbackBuffer(src, w, h, Draw::DataFormat::R8G8B8A8_UNORM,
+			Draw::DataFormat::R8G8B8A8_UNORM, w, delayed->cachedPixels.data());
+	}
 
 	Draw::DataFormat srcFormat;
 	if (aspectBits & GL_COLOR_BUFFER_BIT) {

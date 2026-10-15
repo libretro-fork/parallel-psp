@@ -10,6 +10,7 @@
 #include "Common/GPU/OpenGL/GLProfiler.h"
 #include "Common/GPU/DataFormat.h"
 #include "Common/GPU/Shader.h"
+#include <memory>
 #include "Common/GPU/thin3d.h"
 #include "Common/Data/Collections/TinySet.h"
 #include "Common/Data/Collections/FastVec.h"
@@ -20,6 +21,31 @@ struct GLRViewport {
 
 struct GLRect2D {
 	int x, y, w, h;
+};
+
+struct GLDelayedReadbackResult {
+	GLRect2D rect;
+	std::vector<uint8_t> pixels;
+};
+
+// CPU cache is emulation-thread owned. PBOs and fences are render-thread owned.
+// A single-slot mailbox transfers ownership of the latest completed CPU copy.
+struct GLDelayedReadback {
+	GLRect2D cachedRect{};
+	std::vector<uint8_t> cachedPixels;
+	bool disabled = false;
+	retro_atomic_ptr_t completed{nullptr};
+	~GLDelayedReadback();
+	std::unique_ptr<GLDelayedReadbackResult> Take();
+	void Publish(GLDelayedReadbackResult result);
+	GLRect2D gpuRect{};
+	GLuint buffers[2]{};
+	GLsync fences[2]{};
+	uint64_t sequence[2]{};
+	uint64_t submitted = 0;
+	bool failed = false;
+	void Fail();
+	void Destroy(bool skipGLCalls);
 };
 
 struct GLOffset2D {
@@ -344,6 +370,7 @@ struct GLRStep {
 			GLRect2D srcRect;
 			int aspectMask;
 			Draw::DataFormat dstFormat;
+			bool delayed;
 		} readback;
 		struct {
 			GLRTexture *texture;

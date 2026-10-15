@@ -68,6 +68,14 @@ public:
 	~D3D11Framebuffer() {
 	}
 
+	struct DelayedColorReadback {
+		ComPtr<ID3D11Texture2D> staging[2];
+		uint64_t sequence[2]{};
+		uint64_t submitted = 0;
+		std::vector<uint8_t> pixels;
+		int x = 0, y = 0, width = 0, height = 0;
+	} delayedColor;
+
 	ComPtr<ID3D11Texture2D> colorTex;
 	ComPtr<ID3D11RenderTargetView> colorRTView;
 	ComPtr<ID3D11ShaderResourceView> colorSRView;
@@ -257,6 +265,7 @@ private:
 	bool stencilDirty_ = true;
 
 	// Temporaries
+	bool ReadColorDelayed(D3D11Framebuffer *fb, int x, int y, int w, int h, DataFormat format, void *pixels, int stride);
 	ComPtr<ID3D11Texture2D> packTexture_;
 	Buffer *upBuffer_ = nullptr;
 	Buffer *upIBuffer_ = nullptr;
@@ -1691,6 +1700,84 @@ bool D3D11DrawContext::BlitFramebuffer(Framebuffer *srcfb, int srcX1, int srcY1,
 	return false;
 }
 
+// Only OLD_DATA_OK callers use this cache. Staging resources belong to the
+// framebuffer, so a destroyed/recreated framebuffer cannot inherit old pixels.
+bool D3D11DrawContext::ReadColorDelayed(D3D11Framebuffer *fb, int x, int y, int w, int h, DataFormat format, void *pixels, int stride) {
+	auto &readback = fb->delayedColor;
+	if (readback.width != w || readback.height != h || readback.x != x || readback.y != y) {
+		readback = {};
+		readback.x = x;
+		readback.y = y;
+		readback.width = w;
+		readback.height = h;
+	}
+	if (!readback.staging[0]) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = w;
+		desc.Height = h;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		ComPtr<ID3D11Texture2D> staging[2];
+		for (auto &texture : staging) {
+			if (FAILED(device_->CreateTexture2D(&desc, nullptr, &texture))) {
+				return false;
+			}
+		}
+		readback.staging[0] = staging[0];
+		readback.staging[1] = staging[1];
+	}
+	D3D11_BOX box{(UINT)x, (UINT)y, 0, (UINT)(x + w), (UINT)(y + h), 1};
+	bool bootstrap = readback.pixels.empty();
+	if (bootstrap) {
+		context_->CopySubresourceRegion(readback.staging[0].Get(), 0, 0, 0, 0, fb->colorTex.Get(), 0, &box);
+	}
+	for (int n = 0; n < 2; ++n) {
+		int slot = 0;
+		if (!bootstrap) {
+			if (!readback.sequence[0] && !readback.sequence[1]) {
+				break;
+			}
+			slot = !readback.sequence[0] || (readback.sequence[1] && readback.sequence[1] < readback.sequence[0]) ? 1 : 0;
+		}
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		HRESULT hr = context_->Map(readback.staging[slot].Get(), 0, D3D11_MAP_READ,
+			bootstrap ? 0 : D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+		if (hr == DXGI_ERROR_WAS_STILL_DRAWING) {
+			if (bootstrap) {
+				return false;
+			}
+			break;
+		}
+		if (FAILED(hr)) {
+			return false;
+		}
+		readback.pixels.resize((size_t)w * h * 4);
+		for (int row = 0; row < h; ++row) {
+			memcpy(readback.pixels.data() + (size_t)row * w * 4, (const uint8_t *)mapped.pData + row * mapped.RowPitch, w * 4);
+		}
+		context_->Unmap(readback.staging[slot].Get(), 0);
+		readback.sequence[slot] = 0;
+		if (bootstrap) {
+			break;
+		}
+	}
+	if (!bootstrap) {
+		for (int slot = 0; slot < 2; ++slot) {
+			if (!readback.sequence[slot]) {
+				context_->CopySubresourceRegion(readback.staging[slot].Get(), 0, 0, 0, 0, fb->colorTex.Get(), 0, &box);
+				readback.sequence[slot] = ++readback.submitted;
+				break;
+			}
+		}
+	}
+	ConvertFromRGBA8888((uint8_t *)pixels, readback.pixels.data(), stride, w, w, h, format);
+	return true;
+}
+
 bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelBits, int bx, int by, int bw, int bh, Draw::DataFormat destFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
 	D3D11Framebuffer *fb = (D3D11Framebuffer *)src;
 
@@ -1709,6 +1796,11 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelB
 	if (bh <= 0 || bw <= 0)
 		return true;
 
+	if (mode == ReadbackMode::OLD_DATA_OK && fb && channelBits == Aspect::COLOR_BIT &&
+		ReadColorDelayed(fb, bx, by, bw, bh, destFormat, pixels, pixelStride)) {
+		return true;
+	}
+
 	bool useGlobalPacktex = (bx + bw <= 512 && by + bh <= 512) && channelBits == Aspect::COLOR_BIT;
 
 	ComPtr<ID3D11Texture2D> packTex;
@@ -1716,8 +1808,8 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelB
 		D3D11_TEXTURE2D_DESC packDesc{};
 		packDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		packDesc.BindFlags = 0;
-		packDesc.Width = bw;
-		packDesc.Height = bh;
+		packDesc.Width = channelBits == Aspect::COLOR_BIT ? bw : fb ? fb->Width() : bw;
+		packDesc.Height = channelBits == Aspect::COLOR_BIT ? bh : fb ? fb->Height() : bh;
 		packDesc.ArraySize = 1;
 		packDesc.MipLevels = 1;
 		packDesc.Usage = D3D11_USAGE_STAGING;
@@ -1762,7 +1854,7 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelB
 	DataFormat srcFormat = DataFormat::UNDEFINED;
 	switch (channelBits) {
 	case Aspect::COLOR_BIT:
-		context_->CopySubresourceRegion(packTex.Get(), 0, bx, by, 0, fb ? fb->colorTex.Get() : bbRenderTargetTex_, 0, &srcBox);
+		context_->CopySubresourceRegion(packTex.Get(), 0, useGlobalPacktex ? bx : 0, useGlobalPacktex ? by : 0, 0, fb ? fb->colorTex.Get() : bbRenderTargetTex_, 0, &srcBox);
 		srcFormat = DataFormat::R8G8B8A8_UNORM;
 		break;
 	case Aspect::DEPTH_BIT:
@@ -1777,17 +1869,15 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelB
 		break;
 	}
 
-	// Ideally, we'd round robin between two packTexture_, and simply use the other one. Though if the game
-	// does a once-off copy, that won't work at all.
-
-	// BIG GPU STALL
+	// Current-data callers must wait for the copy to complete.
 	D3D11_MAPPED_SUBRESOURCE map;
 	HRESULT result = context_->Map(packTex.Get(), 0, D3D11_MAP_READ, 0, &map);
 	if (FAILED(result)) {
 		return false;
 	}
 
-	const size_t srcByteOffset = by * map.RowPitch + bx * DataFormatSizeInBytes(srcFormat);
+	const bool offsetInStaging = useGlobalPacktex || channelBits != Aspect::COLOR_BIT;
+	const size_t srcByteOffset = offsetInStaging ? by * map.RowPitch + bx * DataFormatSizeInBytes(srcFormat) : 0;
 	const uint8_t *srcWithOffset = (const uint8_t *)map.pData + srcByteOffset;
 	switch ((Aspect)channelBits) {
 	case Aspect::COLOR_BIT:

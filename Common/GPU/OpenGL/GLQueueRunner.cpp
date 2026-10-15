@@ -1580,6 +1580,82 @@ void GLQueueRunner::PerformReadback(const GLRStep &pass) {
 
 	GLRect2D rect = pass.readback.srcRect;
 
+	if (pass.readback.delayed) {
+		auto &delayed = *fb->delayedReadback;
+		if (delayed.gpuRect.x != rect.x || delayed.gpuRect.y != rect.y || delayed.gpuRect.w != rect.w || delayed.gpuRect.h != rect.h) {
+			delayed.Destroy(false);
+			delayed.gpuRect = rect;
+		}
+		if (delayed.failed) {
+			glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+			return;
+		}
+		const size_t size = (size_t)rect.w * rect.h * 4;
+		for (int n = 0; n < 2; ++n) {
+			if (!delayed.sequence[0] && !delayed.sequence[1]) {
+				break;
+			}
+			int slot = !delayed.sequence[0] || (delayed.sequence[1] && delayed.sequence[1] < delayed.sequence[0]) ? 1 : 0;
+			GLenum status = glClientWaitSync(delayed.fences[slot], 0, 0);
+			if (status == GL_WAIT_FAILED) {
+				delayed.Fail();
+				break;
+			}
+			if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) {
+				break;
+			}
+			glBindBuffer(GL_PIXEL_PACK_BUFFER, delayed.buffers[slot]);
+			const void *mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT);
+			if (mapped) {
+				GLDelayedReadbackResult result{rect, std::vector<uint8_t>(size)};
+				memcpy(result.pixels.data(), mapped, size);
+				if (glUnmapBuffer(GL_PIXEL_PACK_BUFFER)) {
+					delayed.Publish(std::move(result));
+				} else {
+					delayed.Fail();
+				}
+			} else {
+				delayed.Fail();
+			}
+			glDeleteSync(delayed.fences[slot]);
+			delayed.fences[slot] = nullptr;
+			delayed.sequence[slot] = 0;
+			if (delayed.failed) {
+				break;
+			}
+		}
+		for (int slot = 0; slot < 2; ++slot) {
+			if (delayed.failed || delayed.sequence[slot]) {
+				continue;
+			}
+			if (!delayed.buffers[slot]) {
+				glGenBuffers(1, &delayed.buffers[slot]);
+				if (!delayed.buffers[slot]) {
+					delayed.Fail();
+					break;
+				}
+				glBindBuffer(GL_PIXEL_PACK_BUFFER, delayed.buffers[slot]);
+				glBufferData(GL_PIXEL_PACK_BUFFER, size, nullptr, GL_STREAM_READ);
+			} else {
+				glBindBuffer(GL_PIXEL_PACK_BUFFER, delayed.buffers[slot]);
+			}
+			glReadPixels(rect.x, rect.y, rect.w, rect.h, format, type, nullptr);
+			delayed.fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+			if (!delayed.fences[slot]) {
+				delayed.Fail();
+				break;
+			}
+			delayed.sequence[slot] = ++delayed.submitted;
+			break;
+		}
+		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+		if (!gl_extensions.IsGLES || gl_extensions.GLES3) {
+			glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+		}
+		CHECK_GL_ERROR_IF_DEBUG();
+		return;
+	}
+
 	int readbackSize = srcAlignment * rect.w * rect.h;
 	if (readbackSize > readbackBufferSize_) {
 		delete[] readbackBuffer_;
@@ -1833,7 +1909,46 @@ std::string GLQueueRunner::GetGLString(int name) const {
 	return it != glStrings_.end() ? it->second : "";
 }
 
+GLDelayedReadback::~GLDelayedReadback() {
+	Take();
+}
+
+std::unique_ptr<GLDelayedReadbackResult> GLDelayedReadback::Take() {
+	return std::unique_ptr<GLDelayedReadbackResult>((GLDelayedReadbackResult *)retro_atomic_exchange_ptr(&completed, nullptr));
+}
+
+void GLDelayedReadback::Publish(GLDelayedReadbackResult result) {
+	// Only the latest result is useful. Bound memory even while the CPU thread
+	// is waiting for a synchronous task containing many readback steps.
+	auto *copy = new GLDelayedReadbackResult(std::move(result));
+	delete (GLDelayedReadbackResult *)retro_atomic_exchange_ptr(&completed, copy);
+}
+
+void GLDelayedReadback::Fail() {
+	failed = true;
+	Publish({gpuRect, {}});
+}
+
+void GLDelayedReadback::Destroy(bool skipGLCalls) {
+	for (int slot = 0; slot < 2; ++slot) {
+		if (!skipGLCalls) {
+			if (fences[slot]) {
+				glDeleteSync(fences[slot]);
+			}
+			if (buffers[slot]) {
+				glDeleteBuffers(1, &buffers[slot]);
+			}
+		}
+		fences[slot] = nullptr;
+		buffers[slot] = 0;
+		sequence[slot] = 0;
+	}
+}
+
 GLRFramebuffer::~GLRFramebuffer() {
+	if (delayedReadback) {
+		delayedReadback->Destroy(false);
+	}
 	if (handle == 0 && z_stencil_buffer == 0 && z_buffer == 0 && stencil_buffer == 0)
 		return;
 

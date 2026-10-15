@@ -30,6 +30,7 @@ static GLuint fbo, color_rb, depth_rb;
 static uint64_t video_digest = 1469598103934665603ULL;
 static unsigned long frames_video, frames_dupe;
 static unsigned long audio_frames;
+static unsigned long lit_frames, gl_errors;
 static bool verbose;
 
 static PFNGLGENFRAMEBUFFERSPROC p_glGenFramebuffers;
@@ -149,6 +150,16 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
       height = fb_h;
    p_glBindFramebuffer(GL_FRAMEBUFFER, fbo);
    p_glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+   if (glGetError() != GL_NO_ERROR)
+      gl_errors++;
+   for (size_t i = 0; i < (size_t)width * height * 4; i += 4)
+   {
+      if (pixels[i] || pixels[i + 1] || pixels[i + 2])
+      {
+         lit_frames++;
+         break;
+      }
+   }
    fnv(&video_digest, pixels, (size_t)width * height * 4);
 }
 
@@ -344,8 +355,8 @@ int main(int argc, char **argv)
    p_retro_unload_game();
    p_retro_deinit();
    eglTerminate(dpy);
-   printf("@@ frames=%d video=%lu audio_frames=%lu video_digest=%016llx\n",
-         ran, frames_video, audio_frames, (unsigned long long)video_digest);
+   printf("@@ frames=%d video=%lu audio_frames=%lu video_digest=%016llx lit=%lu gl_errors=%lu\n",
+         ran, frames_video, audio_frames, (unsigned long long)video_digest, lit_frames, gl_errors);
    dlclose(h);
-   return ran == frames ? 0 : 1;
+   return ran == frames && gl_errors == 0 ? 0 : 1;
 }

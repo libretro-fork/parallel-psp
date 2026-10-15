@@ -610,6 +610,7 @@ if(UNITTEST)
 		unittest/UnitTest.cpp
 		unittest/TestShaderGenerators.cpp
 		unittest/TestBuiltinVulkanShaders.cpp
+		unittest/TestGPUReadback.cpp
 		unittest/TestArmEmitter.cpp
 		unittest/TestArm64Emitter.cpp
 		unittest/TestCrossSIMD.cpp
@@ -646,7 +647,7 @@ if(UNITTEST)
 		target_link_libraries(PPSSPPUnitTest ${FONTCONFIG_LIB_TARGET})
 	endif()
 	if(WIN32)
-		target_link_libraries(PPSSPPUnitTest d2d1 dwrite d3d11)
+		target_link_libraries(PPSSPPUnitTest d2d1 dwrite d3d11 d3d9 opengl32)
 	endif()
 	setup_target_project(PPSSPPUnitTest unittest)
 	add_test(arm64_emitter PPSSPPUnitTest Arm64Emitter)
@@ -668,6 +669,9 @@ if(UNITTEST)
 	add_test(builtin_vulkan_shaders PPSSPPUnitTest BuiltinVulkanShaders)
 	add_test(builtin_texture_shaders PPSSPPUnitTest BuiltinTextureShaders)
 	add_test(builtin_depal_shaders PPSSPPUnitTest BuiltinDepalShaders)
+	add_test(d3d11_readback PPSSPPUnitTest D3D11Readback)
+	add_test(d3d9_readback PPSSPPUnitTest D3D9Readback)
+	add_test(gl_readback PPSSPPUnitTest GLReadback)
 endif()
 
 if(ATLAS_TOOL)

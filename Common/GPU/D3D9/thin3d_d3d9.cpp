@@ -643,6 +643,8 @@ private:
 	// Framebuffer state
 	ComPtr<IDirect3DSurface9> deviceRTsurf;
 	ComPtr<IDirect3DSurface9> deviceDSsurf;
+	ComPtr<IDirect3DSurface9> readbackSurface_;
+	D3DSURFACE_DESC readbackDesc_{};
 	bool supportsINTZ = false;
 
 	// Dynamic state
@@ -1524,7 +1526,16 @@ bool D3D9Context::CopyFramebufferToMemory(Framebuffer *src, Aspect aspects, int 
 		else
 			deviceRTsurf->GetDesc(&desc);
 
-		hr = device_->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &offscreen, nullptr);
+		if (!readbackSurface_ || readbackDesc_.Width != desc.Width || readbackDesc_.Height != desc.Height || readbackDesc_.Format != desc.Format) {
+			readbackSurface_ = nullptr;
+			hr = device_->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &readbackSurface_, nullptr);
+			if (SUCCEEDED(hr)) {
+				readbackDesc_ = desc;
+			}
+		} else {
+			hr = D3D_OK;
+		}
+		offscreen = readbackSurface_;
 		if (SUCCEEDED(hr)) {
 			hr = device_->GetRenderTargetData(fb ? fb->surf.Get() : deviceRTsurf.Get(), offscreen.Get());
 			if (SUCCEEDED(hr)) {
@@ -1603,6 +1614,7 @@ bool D3D9Context::CopyFramebufferToMemory(Framebuffer *src, Aspect aspects, int 
 void D3D9Context::HandleEvent(Event ev, int width, int height, void *param1, void *param2) {
 	switch (ev) {
 	case Event::LOST_BACKBUFFER:
+		readbackSurface_ = nullptr;
 		deviceRTsurf = nullptr;
 		deviceDSsurf = nullptr;
 		break;
@@ -1615,6 +1627,8 @@ void D3D9Context::HandleEvent(Event ev, int width, int height, void *param1, voi
 	case Event::PRESENTED:
 	case Event::GOT_DEVICE:
 	case Event::LOST_DEVICE:
+		readbackSurface_ = nullptr;
+		break;
 	case Event::RESIZED:
 		break;
 	}

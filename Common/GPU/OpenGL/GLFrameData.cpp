@@ -62,6 +62,9 @@ void GLDeleter::Perform(GLRenderManager *renderManager, bool skipGLCalls) {
 	inputLayouts.clear();
 	for (auto framebuffer : framebuffers) {
 		if (skipGLCalls) {
+			if (framebuffer->delayedReadback) {
+				framebuffer->delayedReadback->Destroy(true);
+			}
 			framebuffer->handle = 0;
 			framebuffer->color_texture.texture = 0;
 			framebuffer->z_stencil_buffer = 0;

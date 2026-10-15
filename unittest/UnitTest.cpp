@@ -2805,6 +2805,9 @@ bool TestShaderGenerators();
 bool TestBuiltinVulkanShaders();
 bool TestBuiltinTextureShaders();
 bool TestBuiltinDepalShaders();
+bool TestD3D11Readback();
+bool TestD3D9Readback();
+bool TestGLReadback();
 bool TestSoftwareGPUJit();
 bool TestIRPassSimplify();
 bool TestThreadManager();
@@ -3026,6 +3029,9 @@ TestItem availableTests[] = {
 	TEST_ITEM(BuiltinVulkanShaders),
 	TEST_ITEM(BuiltinTextureShaders),
 	TEST_ITEM(BuiltinDepalShaders),
+	TEST_ITEM(D3D11Readback),
+	TEST_ITEM(D3D9Readback),
+	TEST_ITEM(GLReadback),
 	TEST_ITEM(SoftwareGPUJit),
 	TEST_ITEM(Path),
 	TEST_ITEM(AndroidContentURI),

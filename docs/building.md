@@ -15,6 +15,6 @@ Regenerate it after changing thin3d presets, Draw2D shaders or ShaderWriter with
 `glslc` and `spirv-val`; `--check` checks that the bank matches the generators
 with the same toolchain. No shader compiler executable is needed by a normal build.
 
-This bank covers fixed presentation and framebuffer-copy shaders. Game shaders,
-depalettization and texture-scaling shaders still use runtime glslang. Removing
+This bank covers fixed presentation, framebuffer-copy and shipped texture-scaling shaders. Game shaders,
+depalettization and custom texture-scaling shaders still use runtime glslang. Removing
 that dependency requires replacing those remaining generators as well.

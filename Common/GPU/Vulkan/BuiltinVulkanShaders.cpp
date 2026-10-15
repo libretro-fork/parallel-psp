@@ -11,6 +11,20 @@ struct BuiltinShader {
 	size_t count;
 };
 #include "Common/GPU/Vulkan/BuiltinShaders.inl"
+
+// Asset files may use CRLF on disk or LF in a shader pack. GLSL treats these
+// identically. Normalize only CRLF pairs, preserving every other source byte.
+bool SameSource(const char *expected, const char *source) {
+	while (*expected && *source) {
+		if (source[0] == '\r' && source[1] == '\n') {
+			++source;
+		}
+		if (*expected++ != *source++) {
+			return false;
+		}
+	}
+	return *expected == *source;
+}
 }
 
 bool LookupBuiltinVulkanShader(uint32_t stage, const char *source, std::vector<uint32_t> &spirv) {
@@ -18,7 +32,7 @@ bool LookupBuiltinVulkanShader(uint32_t stage, const char *source, std::vector<u
 		return false;
 	}
 	for (const auto &shader : builtinShaders) {
-		if (shader.stage == stage && strcmp(source, shader.source) == 0) {
+		if (shader.stage == stage && SameSource(shader.source, source)) {
 			spirv.assign(shader.words, shader.words + shader.count);
 			return true;
 		}

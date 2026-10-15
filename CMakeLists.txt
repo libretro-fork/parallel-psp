@@ -666,6 +666,7 @@ if(UNITTEST)
 	add_test(clz PPSSPPUnitTest CLZ)
 	add_test(shadergen PPSSPPUnitTest ShaderGenerators)
 	add_test(builtin_vulkan_shaders PPSSPPUnitTest BuiltinVulkanShaders)
+	add_test(builtin_texture_shaders PPSSPPUnitTest BuiltinTextureShaders)
 endif()
 
 if(ATLAS_TOOL)

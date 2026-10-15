@@ -4,6 +4,10 @@
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "GPU/Common/Draw2D.h"
 #include "unittest/UnitTest.h"
+#include "Common/Data/Format/IniFile.h"
+#include "Common/File/FileUtil.h"
+#include "Common/StringUtils.h"
+#include <memory>
 
 void GenerateDraw2DVS(ShaderWriter &writer);
 Draw2DPipelineInfo GenerateDraw2DCopyColorFs(ShaderWriter &writer);
@@ -48,5 +52,53 @@ bool TestBuiltinVulkanShaders() {
 		generate(writer);
 		RET(CheckBuiltin(VK_SHADER_STAGE_FRAGMENT_BIT, source));
 	}
+	return true;
+}
+
+// Keep this tied to the same manifest and upload wrapper as the core, so a
+// newly shipped scaler cannot silently regress to runtime compilation.
+extern const char *uploadShader;
+bool TestBuiltinTextureShaders() {
+	IniFile manifest;
+	EXPECT_TRUE(manifest.Load(Path("assets/shaders/defaultshaders.ini")));
+	size_t checked = 0;
+	for (const auto &section : manifest.Sections()) {
+		std::string type;
+		section->Get("Type", &type);
+		if (!equalsNoCase(type, "texture")) {
+			continue;
+		}
+		std::vector<std::string> paths;
+		for (const char *key : {"Compute", "Compute2", "Compute3", "Compute4"}) {
+			std::string filename;
+			if (section->Get(key, &filename)) {
+				paths.push_back(filename);
+			}
+		}
+		EXPECT_FALSE(paths.empty());
+		for (const auto &path : paths) {
+			size_t size = 0;
+			std::unique_ptr<uint8_t[]> data(File::ReadLocalFile(Path("assets/shaders") / path, &size));
+			EXPECT_TRUE(data != nullptr);
+			std::string shader((const char *)data.get(), size);
+			std::string source = paths.size() == 1 ? StringFromFormat(uploadShader, shader.c_str()) : shader;
+			RET(CheckBuiltin(VK_SHADER_STAGE_COMPUTE_BIT, source.c_str()));
+			// The exact same assets can arrive as Windows files or inside a pack.
+			std::string crlf;
+			for (size_t i = 0; i < source.size(); ++i) {
+				if (source[i] == '\r' && i + 1 < source.size() && source[i + 1] == '\n') {
+					continue;
+				}
+				if (source[i] == '\n') crlf.push_back('\r');
+				crlf.push_back(source[i]);
+			}
+			std::vector<uint32_t> original, normalized;
+			EXPECT_TRUE(LookupBuiltinVulkanShader(VK_SHADER_STAGE_COMPUTE_BIT, source.c_str(), original));
+			EXPECT_TRUE(LookupBuiltinVulkanShader(VK_SHADER_STAGE_COMPUTE_BIT, crlf.c_str(), normalized));
+			EXPECT_TRUE(original == normalized);
+			++checked;
+		}
+	}
+	EXPECT_TRUE(checked >= 14);
 	return true;
 }

@@ -1,9 +1,9 @@
 // Test shader for constant buffers in texture upscalers
 
-#extension GL_EXT_scalar_block_layout : enable
-
-layout(scalar, set = CBUFFER_SET, binding = CBUFFER_BINDING) uniform PixelData {
-    uint pixels[256];
+// Four packed pixels per std140 vector keeps the 1024-byte input layout
+// without requiring scalar-block-layout support from the Vulkan device.
+layout(std140, set = CBUFFER_SET, binding = CBUFFER_BINDING) uniform PixelData {
+    uvec4 pixels[64];
 };
 
 void applyScaling(uvec2 origxy) {
@@ -13,8 +13,8 @@ void applyScaling(uvec2 origxy) {
     uint y = origxy.y & 15u;
     uint index = (y * 16u) + x;
 
-    // 2. Access the scalar array
-    uint color = pixels[index];
+    // 2. Access the packed pixel array
+    uint color = pixels[index >> 2u][index & 3u];
     
     // 3. Unpack (Note: unpackUnorm4x8 expects a uint)
     vec4 rgba = unpackUnorm4x8(color);

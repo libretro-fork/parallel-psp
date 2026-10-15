@@ -6,4 +6,5 @@
 
 // Uses Vulkan shader stage bits without depending on Vulkan headers. Returns
 // false without changing spirv when the source is not in the fixed bank.
+// Source matching treats CRLF and LF identically, including asset-pack inputs.
 bool LookupBuiltinVulkanShader(uint32_t stage, const char *source, std::vector<uint32_t> &spirv);

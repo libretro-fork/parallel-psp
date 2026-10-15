@@ -20,6 +20,7 @@
 #include "Common/Log.h"
 #include "Core/HW/AvcDecoder.h"
 
+#include <climits>
 #include <formats/rh264.h>
 #include <libretro.h>
 
@@ -50,6 +51,7 @@ AvcDecoder::~AvcDecoder() {
 }
 
 void AvcDecoder::Close() {
+	pendingPlanes_ = false;
 	if (frontendDecoder_)
 		frontend_->close(frontendDecoder_);
 	frontendDecoder_ = nullptr;
@@ -70,7 +72,12 @@ void AvcDecoder::Flush() {
 	Open();
 }
 
-bool AvcDecoder::TakeFrontendFrame(const retro_video_decode_frame &frame) {
+bool AvcDecoder::TakeFrontendFrame(const retro_video_decode_frame &frame, bool deferred, bool countFrame) {
+	if (!frame.width || !frame.height || frame.width > INT_MAX || frame.height > INT_MAX) {
+		haveFrame_ = false;
+		pendingPlanes_ = false;
+		return false;
+	}
 	for (int i = 0; i < 3; i++) {
 		planes_[i] = frame.planes[i];
 		strides_[i] = frame.strides[i];
@@ -81,8 +88,13 @@ bool AvcDecoder::TakeFrontendFrame(const retro_video_decode_frame &frame) {
 		INFO_LOG(Log::ME, "AvcDecoder: frontend %s H.264 decoding active (%dx%d)", frame.hardware ? "hardware" : "software", width_, height_);
 		reportedDecoder_ = true;
 	}
-	frameCount_++;
-	haveFrame_ = width_ > 0 && height_ > 0 && planes_[0] && planes_[1] && planes_[2];
+	if (countFrame) frameCount_++;
+	const unsigned chromaWidth = (frame.width + 1) / 2;
+	haveFrame_ = deferred || (planes_[0] && planes_[1] && planes_[2]
+		&& frame.strides[0] >= frame.width && frame.strides[0] <= INT_MAX
+		&& frame.strides[1] >= chromaWidth && frame.strides[1] <= INT_MAX
+		&& frame.strides[2] >= chromaWidth && frame.strides[2] <= INT_MAX);
+	pendingPlanes_ = haveFrame_ && deferred;
 	return haveFrame_;
 }
 
@@ -109,14 +121,18 @@ bool AvcDecoder::TakeFrame() {
 	return haveFrame_;
 }
 
-bool AvcDecoder::Decode(const u8 *data, int size) {
+bool AvcDecoder::Decode(const u8 *data, int size, bool deferPlanes) {
+	pendingPlanes_ = false;
 	haveFrame_ = false;
 	lastResult_ = -1;
 	if ((!dec_ && !frontendDecoder_) || !data || size <= 0)
 		return false;
 
 	retro_video_decode_frame frame{};
-	const int r = frontendDecoder_ ? frontend_->decode(frontendDecoder_, data, (size_t)size, &frame)
+	const bool deferred = deferPlanes && frontendDecoder_ && frontend_->interface_version >= 2
+		&& frontend_->decode_ex && frontend_->drain_ex && frontend_->get_frame;
+	const int r = deferred ? frontend_->decode_ex(frontendDecoder_, data, (size_t)size, &frame, RETRO_VIDEO_DECODE_DEFER_PLANES)
+		: frontendDecoder_ ? frontend_->decode(frontendDecoder_, data, (size_t)size, &frame)
 		: rh264_video_decode(dec_, data, (size_t)size);
 	if (r < 0) {
 		// A unit the decoder refuses leaves the pictures predicted from it wrong until the next
@@ -126,6 +142,10 @@ bool AvcDecoder::Decode(const u8 *data, int size) {
 			WARN_LOG(Log::ME, "AvcDecoder: access unit %d (%d bytes) refused", frameCount_ + failedUnits_, size);
 			wasFailing_ = true;
 		}
+		return false;
+	}
+	if (r == 2) {
+		lastResult_ = 2;  // The caller must retain this access unit and retry later.
 		return false;
 	}
 	if (wasFailing_) {
@@ -138,17 +158,21 @@ bool AvcDecoder::Decode(const u8 *data, int size) {
 		lastResult_ = 0;
 		return false;
 	}
-	lastResult_ = (frontendDecoder_ ? TakeFrontendFrame(frame) : TakeFrame()) ? 1 : -2;
+	lastResult_ = (frontendDecoder_ ? TakeFrontendFrame(frame, deferred) : TakeFrame()) ? 1 : -2;
 	return lastResult_ == 1;
 }
 
-bool AvcDecoder::Drain() {
+bool AvcDecoder::Drain(bool deferPlanes) {
+	pendingPlanes_ = false;
 	haveFrame_ = false;
 	lastResult_ = 0;
 	retro_video_decode_frame frame{};
 	if (frontendDecoder_) {
-		const int result = frontend_->drain(frontendDecoder_, &frame);
-		lastResult_ = result == 1 ? (TakeFrontendFrame(frame) ? 1 : -2) : result;
+		const bool deferred = deferPlanes && frontend_->interface_version >= 2
+			&& frontend_->decode_ex && frontend_->drain_ex && frontend_->get_frame;
+		const int result = deferred ? frontend_->drain_ex(frontendDecoder_, &frame, RETRO_VIDEO_DECODE_DEFER_PLANES)
+			: frontend_->drain(frontendDecoder_, &frame);
+		lastResult_ = result == 1 ? (TakeFrontendFrame(frame, deferred) ? 1 : -2) : result;
 		return lastResult_ == 1;
 	}
 	if (!dec_ || rh264_video_drain(dec_) != 0)
@@ -157,14 +181,29 @@ bool AvcDecoder::Drain() {
 	return lastResult_ == 1;
 }
 
+bool AvcDecoder::Materialize() {
+	if (!haveFrame_) return false;
+	if (!pendingPlanes_) return true;
+	retro_video_decode_frame frame{};
+	if (frontend_->get_frame(frontendDecoder_, &frame) != 1
+		|| frame.width != (unsigned)width_ || frame.height != (unsigned)height_
+		|| !TakeFrontendFrame(frame, false, false)) {
+		haveFrame_ = false;
+		pendingPlanes_ = false;
+		lastResult_ = -2;
+		return false;
+	}
+	return true;
+}
+
 const u8 *AvcDecoder::Plane(int index) const {
-	if (!haveFrame_ || index < 0 || index >= 3)
+	if (!haveFrame_ || pendingPlanes_ || index < 0 || index >= 3)
 		return nullptr;
 	return planes_[index];
 }
 
 int AvcDecoder::Stride(int index) const {
-	if (!haveFrame_ || index < 0 || index >= 3)
+	if (!haveFrame_ || pendingPlanes_ || index < 0 || index >= 3)
 		return 0;
 	return strides_[index];
 }

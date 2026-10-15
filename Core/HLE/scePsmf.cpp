@@ -1343,6 +1343,8 @@ static bool __PsmfPlayerContinueSeek(PsmfPlayer *psmfplayer, int tries = 50) {
 	}
 
 	while (!psmfplayer->mediaengine->seekTo(psmfplayer->seekDestTimeStamp, videoPixelMode)) {
+		if (psmfplayer->mediaengine->IsVideoDecodeBusy())
+			return false;
 		if (--tries <= 0) {
 			return false;
 		}
@@ -1595,7 +1597,10 @@ static int scePsmfPlayerGetVideoData(u32 psmfPlayer, u32 videoDataAddr)
 		} else {
 			// This is an approximation, it should allow a certain amount ahead before skipping frames.
 			while (!psmfplayer->mediaengine->IsVideoEnd() && deltapts <= -(VIDEO_FRAME_DURATION_TS * 5)) {
-				psmfplayer->mediaengine->stepVideo(videoPixelMode, true);
+				if (!psmfplayer->mediaengine->stepVideo(videoPixelMode, true)) {
+					doVideoStep = false;
+					break;
+				}
 				deltapts = psmfplayer->mediaengine->getVideoTimeStamp() - psmfplayer->mediaengine->getAudioTimeStamp();
 			}
 		}

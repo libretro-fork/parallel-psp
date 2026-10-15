@@ -244,7 +244,15 @@ void retro_set_environment(retro_environment_t cb)
    environ_cb = cb;
    videoDecodeInterface = {};
    videoDecodeInterface.interface_version = RETRO_VIDEO_DECODE_INTERFACE_VERSION;
-   AvcDecoder::SetFrontendDecoder(environ_cb(RETRO_ENVIRONMENT_GET_VIDEO_DECODE_INTERFACE, &videoDecodeInterface)
+   bool videoDecodeAvailable = environ_cb(RETRO_ENVIRONMENT_GET_VIDEO_DECODE_INTERFACE, &videoDecodeInterface);
+   if (!videoDecodeAvailable) {
+      videoDecodeInterface = {};
+      videoDecodeInterface.interface_version = 1;
+      videoDecodeAvailable = environ_cb(RETRO_ENVIRONMENT_GET_VIDEO_DECODE_INTERFACE, &videoDecodeInterface);
+   }
+   AvcDecoder::SetFrontendDecoder(videoDecodeAvailable
+         && videoDecodeInterface.interface_version >= 1
+         && videoDecodeInterface.interface_version <= RETRO_VIDEO_DECODE_INTERFACE_VERSION
          && videoDecodeInterface.open && videoDecodeInterface.decode && videoDecodeInterface.drain
          && videoDecodeInterface.close ? &videoDecodeInterface : nullptr);
 

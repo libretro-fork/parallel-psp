@@ -350,6 +350,10 @@ bool MediaEngine::streamFed() const {
 
 void MediaEngine::clearUnits() {
 	m_au.clear();
+	m_decodeUnit.clear();
+	m_retryDecode = false;
+	m_videoBusy = false;
+	m_retryPts = -1;
 	m_auBase = 0;
 	m_auScan = 0;
 	m_auHasSlice = false;
@@ -458,7 +462,9 @@ void MediaEngine::dropOldestPts() {
 		m_pendingPts.erase(std::min_element(m_pendingPts.begin(), m_pendingPts.end()));
 }
 
-void MediaEngine::frameDecoded(int videoPixelMode, bool skipFrame) {
+bool MediaEngine::frameDecoded(int videoPixelMode, bool skipFrame) {
+	if (!skipFrame && !m_avc->Materialize())
+		return false;
 	// Shown in time stamp order: the frame out is the earliest unit not yet shown.
 	s64 pts = -1;
 	if (!m_pendingPts.empty()) {
@@ -485,22 +491,34 @@ void MediaEngine::frameDecoded(int videoPixelMode, bool skipFrame) {
 			m_avc->Plane(0), m_avc->Stride(0), m_avc->Plane(1), m_avc->Plane(2), m_avc->Stride(1),
 			0, 0, width, height);
 	}
+	return true;
 }
 
 bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 	if (!m_contextOpen || !m_avc || !m_psmf)
 		return false;
 
-	std::vector<u8> unit;
+	m_videoBusy = false;
+	std::vector<u8> &unit = m_decodeUnit;
 	for (;;) {
-		s64 pts;
+		const bool retry = m_retryDecode;
+		s64 pts = m_retryPts;
 		const bool ended = streamFed();
-		if (takeAccessUnit(ended, unit, &pts)) {
-			if (pts >= 0)
+		if (retry || takeAccessUnit(ended, unit, &pts)) {
+			if (!retry && pts >= 0)
 				m_pendingPts.push_back(pts);
-			if (m_avc->Decode(unit.data(), (int)unit.size())) {
-				frameDecoded(videoPixelMode, skipFrame);
-				return true;
+			const bool gotFrame = m_avc->Decode(unit.data(), (int)unit.size(), true);
+			m_retryDecode = m_avc->LastResult() == 2;
+			if (m_retryDecode) {
+				m_retryPts = pts;
+				m_videoBusy = true;
+				return false;
+			}
+			if (gotFrame) {
+				if (frameDecoded(videoPixelMode, skipFrame))
+					return true;
+				dropOldestPts();
+				continue;
 			}
 			// A unit refused never shows, and a frame that could not be used went: their time
 			// stamps would otherwise stand in for every frame after them.
@@ -514,9 +532,15 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 			continue;
 		// Nothing more to read. At the end of the stream the frames held for reordering come out.
 		while (ended) {
-			if (m_avc->Drain()) {
-				frameDecoded(videoPixelMode, skipFrame);
-				return true;
+			if (m_avc->Drain(true)) {
+				if (frameDecoded(videoPixelMode, skipFrame))
+					return true;
+				dropOldestPts();
+				continue;
+			}
+			if (m_avc->LastResult() == 2) {
+				m_videoBusy = true;
+				return false;
 			}
 			if (m_avc->LastResult() != -2)
 				break;

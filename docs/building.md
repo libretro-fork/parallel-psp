@@ -96,3 +96,28 @@ and desktop GL checks require a driver. Their device-unavailable cases report a
 skip. The tests cover delayed/current results, rectangle changes, padded rows,
 format conversion, depth/stencil staging, PBO publication and resource cleanup.
 No savestate layout or shader cache key changes are involved.
+
+## Deferred FMV readback
+
+The experimental frontend H.264 interface supports version 2. Its version-1
+prefix and eager callbacks remain compatible, and the core retries a version-1
+query on older frontends. Extended decode/drain calls can return metadata with
+deferred CPU planes; get_frame performs the existing GPU readback once, only
+when those pixels are needed. It may synchronize with the decoder. All output
+expires on the next decode/drain/close call.
+
+PSMF catch-up and seeking discard output without downloading it. Reference
+pictures still decode normally. A busy backend retains the same access unit
+and timestamp for a later HLE call; catch-up and seek loops yield rather than
+polling or consuming new input. One extra pending-output GPU slot is reserved
+when supported. Backends without that capacity retain eager hardware readback.
+
+Displayed frames still become CPU planes, convert to PSP pixels and enter guest
+memory. This does not make displayed FMVs zero-copy. A GPU-resident display path
+also needs guest-memory coherency and texture/display integration.
+
+`PPSSPPUnitTest DeferredVideoDecode` checks materialization, legacy fallback,
+readback failures and PSMF retry/discard behavior. In RetroArch, run
+`python3 tools/test_video_decode_interface.py --sanitize` for real callback,
+version-1 allocation-canary and version-2 backpressure checks; the standalone
+rh264 hardware sample also verifies readback counts and reference ordering.

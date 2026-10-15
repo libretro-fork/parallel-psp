@@ -595,6 +595,7 @@ if(UNITTEST)
 		unittest/TestShaderGenerators.cpp
 		unittest/TestBuiltinVulkanShaders.cpp
 		unittest/TestGPUReadback.cpp
+		unittest/TestVideoDecode.cpp
 		unittest/TestArmEmitter.cpp
 		unittest/TestArm64Emitter.cpp
 		unittest/TestCrossSIMD.cpp
@@ -653,6 +654,7 @@ if(UNITTEST)
 	add_test(builtin_vulkan_shaders PPSSPPUnitTest BuiltinVulkanShaders)
 	add_test(builtin_texture_shaders PPSSPPUnitTest BuiltinTextureShaders)
 	add_test(builtin_depal_shaders PPSSPPUnitTest BuiltinDepalShaders)
+	add_test(deferred_video_decode PPSSPPUnitTest DeferredVideoDecode)
 	add_test(vulkan_readback_plan PPSSPPUnitTest VulkanReadbackPlan)
 	add_test(d3d11_readback PPSSPPUnitTest D3D11Readback)
 	add_test(d3d9_readback PPSSPPUnitTest D3D9Readback)

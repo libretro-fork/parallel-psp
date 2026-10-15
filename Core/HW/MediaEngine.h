@@ -52,6 +52,7 @@ public:
 	bool addVideoStream(int streamNum, int streamId = -1);
 	// open the mpeg context
 	bool openContext(bool keepReadPos = false);
+	bool IsVideoDecodeBusy() const { return m_videoBusy; }
 	void closeContext();
 
 	// Returns number of packets actually added. I guess the buffer might be full.
@@ -97,7 +98,7 @@ private:
 	// The next whole access unit of the selected video stream, into unit/pts.
 	bool takeAccessUnit(bool streamEnded, std::vector<u8> &unit, s64 *pts);
 	// A decoded frame: the time it stands for, and its pixels unless skipped.
-	void frameDecoded(int videoPixelMode, bool skipFrame);
+	bool frameDecoded(int videoPixelMode, bool skipFrame);
 	// Whether the whole program stream the header promised has gone to the demuxer.
 	bool streamFed() const;
 	void clearUnits();
@@ -124,6 +125,10 @@ private:
 	struct rpsmf *m_psmf = nullptr;
 	AvcDecoder *m_avc = nullptr;
 	std::vector<u8> m_au;
+	std::vector<u8> m_decodeUnit;  // Keep input stable across hardware backpressure.
+	bool m_retryDecode = false;
+	bool m_videoBusy = false;
+	s64 m_retryPts = -1;
 	size_t m_auBase = 0;  // video bytes taken before m_au[0]
 	size_t m_auScan = 0;
 	bool m_auHasSlice = false;

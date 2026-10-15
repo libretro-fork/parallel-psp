@@ -44,10 +44,13 @@ public:
 
 	// Decodes one access unit. Returns true when a frame came out - H.264 reorders, so a frame
 	// is not produced for every unit fed in, and that is not an error.
-	bool Decode(const u8 *data, int size);
+	bool Decode(const u8 *data, int size, bool deferPlanes = false);
 
 	// At the end of a stream: the next of the frames held back for reordering, if any.
-	bool Drain();
+	bool Drain(bool deferPlanes = false);
+
+	// Download a deferred frame once, before accessing its CPU planes.
+	bool Materialize();
 
 	// Throws away any decoder state, for a seek or a new stream.
 	void Flush();
@@ -55,7 +58,7 @@ public:
 	bool HasFrame() const { return haveFrame_; }
 
 	// What the last Decode or Drain did: a frame out (1), nothing yet (0), the unit refused (-1),
-	// or a frame out that could not be used (-2).
+	// a frame out that could not be used (-2), or busy (2): retry the same input.
 	int LastResult() const { return lastResult_; }
 	int Width() const { return width_; }
 	int Height() const { return height_; }
@@ -72,7 +75,7 @@ public:
 private:
 	// The frame the last Decode or Drain gave, from the decoder.
 	bool TakeFrame();
-	bool TakeFrontendFrame(const retro_video_decode_frame &frame);
+	bool TakeFrontendFrame(const retro_video_decode_frame &frame, bool deferred = false, bool countFrame = true);
 	void Open();
 	void Close();
 
@@ -83,6 +86,7 @@ private:
 	const u8 *planes_[3]{};
 	int strides_[3]{};
 	bool haveFrame_ = false;
+	bool pendingPlanes_ = false;
 	int lastResult_ = 0;
 	// For reporting runs of refused access units rather than one line each - see Decode.
 	bool wasFailing_ = false;

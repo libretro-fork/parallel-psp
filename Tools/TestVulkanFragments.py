@@ -90,6 +90,13 @@ int main(int argc, char **argv) {
   Emit("case_"+std::to_string(count)+(compiled ? "_new.frag" : "_ref.frag"),code);
  }
  ++count;
+ FShaderID bilinear; bilinear.FromUint64(2ULL | (3ULL<<4) | (3ULL<<49) | (1ULL<<53) | (5ULL<<55));
+ for(int compiled=0;compiled<2;++compiled) {
+  ShaderLanguageDesc language(GLSL_VULKAN); Draw::Bugs bugs;
+  char code[32768];uint64_t uniforms;FragmentShaderFlags flags;std::string error;
+  if (!Reference::GenerateFragmentShader(bilinear,code,language,bugs,&uniforms,&flags,&error,compiled)) std::abort();
+  Emit(compiled ? "bilinear_new.frag" : "bilinear_ref.frag",code);
+ }
  printf("%d fragment cases\n",count);
 }
 '''
@@ -214,6 +221,38 @@ void main() {
         (oracle/"compare.cpp").write_text(executor)
         run(args.cxx,"-std=c++17","-O2",oracle/"compare.cpp","-lvulkan","-o",oracle/"compare")
         run(oracle/"compare",oracle,1,0)
+
+
+        # A mapped first index can equal the three raw neighbor indices even
+        # though their final palette entries differ: raw 4,2,2,2 shifted by 1
+        # becomes 2,1,1,1. Compare both generators against actual bilinear math.
+        oracle=tmp/"bilinear";oracle.mkdir()
+        expected=r'''#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(std430,set=0,binding=3) buffer Output { vec4 pixels[]; } result;
+void main() {
+ uvec2 xy=gl_GlobalInvocationID.xy;vec2 f=vec2(xy)/31.0;
+ vec4 first=vec4(2.0/31.0,0.0,74.0/255.0,1.0);
+ vec4 neighbor=vec4(1.0/31.0,0.0,37.0/255.0,1.0);
+ result.pixels[xy.y*32u+xy.x]=mix(first,neighbor,1.0-(1.0-f.x)*(1.0-f.y));
+}
+'''
+        for index,mode in enumerate(("ref","new")):
+            candidate=kernel((tmp/("bilinear_"+mode+".frag")).read_text())
+            candidate=candidate.replace("v_texcoord=vec3((vec2(xy)+vec2(0.5))/32.0,0.5+a);",
+                "v_texcoord=vec3((vec2(a,b)+vec2(0.5))/32.0,1.0);")
+            candidate=candidate.replace("vec4 value=xy.y%3u==0u ? fragColor0 : xy.y%3u==1u ? fragColor1 : vec4(test_Depth);", "vec4 value=fragColor0;")
+            for label,source in (("new",candidate),("ref",expected)):
+                path=oracle/("case_%d_%s.comp"%(index,label));path.write_text(source)
+                run(args.glslc,"--target-env=vulkan1.0","-O0",path,"-o",path.with_suffix(".spv"))
+                run(args.spirv_val,"--target-env","vulkan1.0",path.with_suffix(".spv"))
+        executor=executor_source().replace("pixels[i] = (random >> 16) / 65535.0f;", "pixels[i] = float(i / 4 == 0 ? 4 : 2) / 255.0f;")
+        executor=re.sub(r"\s*if \(i % 4 == 3 && \(i / 4\) % 5 == 0\)\s*pixels\[i\] = 1.0f;", "",executor)
+        executor=executor.replace("u[80]=linear ? 1.0f : 0.0f;u[81]=linear ? 2.0f : 1.0f;", "u[80]=0.0f;u[81]=1.0f;")
+        executor=executor.replace("255u|(linear ? 0x80000000u : 0u)", "255u|0x100u|0x80000000u")
+        (oracle/"compare.cpp").write_text(executor)
+        run(args.cxx,"-std=c++17","-O2",oracle/"compare.cpp","-lvulkan","-o",oracle/"compare")
+        run(oracle/"compare",oracle,2,0)
 
 
 if __name__=="__main__":

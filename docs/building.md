@@ -41,7 +41,7 @@ variants and the absence of RelaxedPrecision in game shader modules.
 Vulkan compute wrappers. They require a host C++ compiler, glslc, spirv-val and
 Vulkan headers/loader. Set `VK_ICD_FILENAMES` to a lavapipe ICD and
 `LP_NUM_THREADS=4` for windowless software execution. The fragment test also
-checks byte unpacking against an independent palette-index oracle. These tests
+checks byte unpacking and bilinear palette filtering against independent oracles. These tests
 check math; graphics pipelines, derivatives, multiview and game presentation
 still need frontend tests.
 

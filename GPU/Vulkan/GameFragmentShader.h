@@ -216,8 +216,10 @@ bool colorFail(vec3 color) {
       uint offset=((u_depal_mask_shift_off_fmt>>16u)&255u)<<4u;
       i0=((i0>>shift)&mask)|offset;
       t=texelFetch(pal,ivec2(i0,0),0);
-      if (linear && !(i0==i1 && i1==i2 && i2==i3)) {
+      if (linear) {
         i1=((i1>>shift)&mask)|offset; i2=((i2>>shift)&mask)|offset; i3=((i3>>shift)&mask)|offset;
+      }
+      if (linear && !(i0==i1 && i1==i2 && i2==i3)) {
         t1=texelFetch(pal,ivec2(i1,0),0); t2=texelFetch(pal,ivec2(i2,0),0); t3=texelFetch(pal,ivec2(i3,0),0);
         t=mix(t,t1,fraction.x); t2=mix(t2,t3,fraction.x); t=mix(t,t2,fraction.y);
       }

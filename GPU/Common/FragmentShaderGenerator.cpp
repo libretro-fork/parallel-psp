@@ -866,10 +866,13 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 				}
 				WRITE(p, "  index0 = ((index0 >> depalShift) & depalMask) | depalOffset;\n");
 				p.C("  t = ").LoadTexture2D("pal", "ivec2(index0, 0)", 0).C(";\n");
-				WRITE(p, "  if (bilinear && !(index0 == index1 && index1 == index2 && index2 == index3)) {\n");
+				// Compare final palette entries, never a mapped index with raw texels.
+				WRITE(p, "  if (bilinear) {\n");
 				WRITE(p, "    index1 = ((index1 >> depalShift) & depalMask) | depalOffset;\n");
 				WRITE(p, "    index2 = ((index2 >> depalShift) & depalMask) | depalOffset;\n");
 				WRITE(p, "    index3 = ((index3 >> depalShift) & depalMask) | depalOffset;\n");
+				WRITE(p, "  }\n");
+				WRITE(p, "  if (bilinear && !(index0 == index1 && index1 == index2 && index2 == index3)) {\n");
 				p.C("    t1 = ").LoadTexture2D("pal", "ivec2(index1, 0)", 0).C(";\n");
 				p.C("    t2 = ").LoadTexture2D("pal", "ivec2(index2, 0)", 0).C(";\n");
 				p.C("    t3 = ").LoadTexture2D("pal", "ivec2(index3, 0)", 0).C(";\n");

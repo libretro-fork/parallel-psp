@@ -28,6 +28,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
+#include "Core/HW/VideoMemory.h"
 #include "Core/ConfigValues.h"
 #include "Core/Core.h"
 #include "Core/CoreParameter.h"
@@ -597,6 +598,8 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 
 	vfb->colorBindSeq = GetBindSeqCount();
 
+	ResolveVideoMemoryOwner(vfb);
+	EnsureVideoCpuCurrent(vfb);
 	gstate_c.curRTWidth = vfb->width;
 	gstate_c.curRTHeight = vfb->height;
 	gstate_c.curRTRenderWidth = vfb->renderWidth;
@@ -948,6 +951,10 @@ Draw2DPipeline *FramebufferManagerCommon::GetReinterpretPipeline(GEBufferFormat 
 }
 
 void FramebufferManagerCommon::DestroyFramebuf(VirtualFramebuffer *v) {
+	if (!ResolveVideoMemoryOwner(v)) {
+		ERROR_LOG(Log::FrameBuf, "Could not preserve video buffer %08x during destruction", v->fb_address);
+		DiscardVideoMemoryOwner(v);
+	}
 	// Notify the texture cache of both the color and depth buffers.
 	textureCache_->NotifyFramebuffer(v, NOTIFY_FB_DESTROYED);
 	if (v->fbo) {
@@ -1148,6 +1155,81 @@ void FramebufferManagerCommon::PerformWriteFormattedFromMemory(u32 addr, int siz
 	}
 }
 
+bool FramebufferManagerCommon::MaterializeVideo(void *owner) {
+	auto *vfb = (VirtualFramebuffer *)owner;
+	auto *manager = vfb->videoOwner;
+	if (!manager || !vfb->fbo || vfb->renderScaleFactor != 1) return false;
+	const bool temporaryFrame = manager->draw_->BeginVideoMemoryAccess();
+	manager->FlushBeforeCopy();
+	const bool copied = manager->draw_->CopyFramebufferToMemory(vfb->fbo, Draw::Aspect::COLOR_BIT,
+		0, 0, vfb->width, vfb->height, Draw::DataFormat::R8G8B8A8_UNORM,
+		Memory::GetPointerWriteUnchecked(vfb->fb_address), vfb->fb_stride, Draw::ReadbackMode::BLOCK, "Video CPU access");
+	if (!copied) { manager->draw_->EndVideoMemoryAccess(temporaryFrame); return false; }
+	++gpuStats.perFrame.numVideoReadbacks;
+	vfb->videoCpuDirty = true;
+	manager->draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
+	manager->textureCache_->ForgetLastTexture();
+	manager->RebindFramebuffer("Video CPU access");
+	manager->draw_->EndVideoMemoryAccess(temporaryFrame);
+	gstate_c.Dirty(DIRTY_ALL_RENDER_STATE);
+	return true;
+}
+
+void FramebufferManagerCommon::EnsureVideoCpuCurrent(VirtualFramebuffer *vfb) {
+	if (!vfb || !vfb->videoCpuDirty) return;
+	vfb->videoCpuDirty = false;
+	++gpuStats.perFrame.numVideoCpuUpdates;
+	DrawPixels(vfb, 0, 0, Memory::GetPointerUnchecked(vfb->fb_address), vfb->fb_format,
+		vfb->fb_stride, vfb->width, vfb->height, RASTER_COLOR, "Video CPU update");
+}
+
+bool FramebufferManagerCommon::WriteVideoTexture(u32 address, int stride, int width, int height, Draw::Texture *texture) {
+	const bool linearVram = Memory::IsVRAMAddress(address) && !(address & 0x00200000);
+	if (!texture || !useBufferedRendering_ || !CanDeferVideoMemory() || (!Memory::IsRAMAddress(address) && !linearVram)
+		|| width <= 0 || height <= 0 || stride < width || stride > 2048 || height > 2048)
+		return false;
+	const u32 size = (u32)stride * height * 4;
+	if (!Memory::IsValidRange(address, size) || (linearVram && (uint64_t)VideoMemory::CanonicalAddress(address) + size > 0x04200000)) return false;
+	VirtualFramebuffer *vfb = ResolveVFB(address, stride, GE_FORMAT_8888);
+	if (vfb && (vfb->renderScaleFactor != 1 || vfb->fb_stride != stride || vfb->height != height || vfb->width < width || vfb->width > stride))
+		return false;
+	if (vfb && vfb->videoOwner == this) {
+		if (!PrepareVideoMemoryOverwrite(address, size)) return false;
+	} else if (!ResolveVideoMemory(address, size)) {
+		return false;
+	}
+	FlushBeforeCopy();
+	if (!vfb) {
+		const int oldScale = renderScaleFactor_;
+		renderScaleFactor_ = 1;
+		vfb = CreateRAMFramebuffer(address, width, height, stride, GE_FORMAT_8888, true);
+		renderScaleFactor_ = oldScale;
+		if (!vfb || !vfb->fbo) return false;
+		// Row padding remains in RAM; every pixel of this new framebuffer is overwritten.
+	}
+	EnsureVideoCpuCurrent(vfb);
+	draw_->BindFramebufferAsRenderTarget(vfb->fbo,
+		{Draw::RPAction::KEEP, Draw::RPAction::KEEP, Draw::RPAction::KEEP}, "Video surface");
+	SetViewport2D(0, 0, vfb->renderWidth, vfb->renderHeight);
+	draw_->SetScissorRect(0, 0, vfb->renderWidth, vfb->renderHeight);
+	draw_->BindTextures(0, 1, &texture, Draw::TextureBindFlags::VULKAN_BIND_ARRAY);
+	DrawActiveTexture(0, 0, width, height, vfb->width, height, 0, 0, 1, 1,
+		ROTATION_LOCKED_HORIZONTAL, DRAWTEX_NEAREST);
+	vfb->videoOwner = this;
+	vfb->last_frame_render = gpuStats.totals.numFlips;
+	vfb->colorBindSeq = GetBindSeqCount();
+	SetColorUpdated(vfb, 0);
+	textureCache_->NotifyFramebuffer(vfb, NOTIFY_FB_UPDATED);
+	textureCache_->ForgetLastTexture();
+	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
+	RebindFramebuffer("Video surface");
+	gstate_c.Dirty(DIRTY_ALL_RENDER_STATE);
+	++gpuStats.perFrame.numVideoSurfaceWrites;
+	if (!TrackVideoMemory(address, size, vfb, MaterializeVideo))
+		return MaterializeVideo(vfb);
+	return true;
+}
+
 void FramebufferManagerCommon::UpdateFromMemory(u32 addr, int size) {
 	// Take off the uncached flag from the address. Not to be confused with the start of VRAM.
 	addr &= 0x3FFFFFFF;
@@ -1249,6 +1331,7 @@ void FramebufferManagerCommon::DrawPixels(VirtualFramebuffer *vfb, int dstX, int
 }
 
 bool FramebufferManagerCommon::BindFramebufferAsColorTexture(int stage, VirtualFramebuffer *framebuffer, int flags, int layer) {
+	EnsureVideoCpuCurrent(framebuffer);
 	if (!framebuffer->fbo || !useBufferedRendering_) {
 		draw_->BindTexture(stage, nullptr);
 		gstate_c.skipDrawReason |= SKIPDRAW_BAD_FB_TEXTURE;
@@ -1670,6 +1753,7 @@ void FramebufferManagerCommon::PrepareCopyDisplayToOutput(const DisplayLayoutCon
 		return;
 	}
 
+	EnsureVideoCpuCurrent(vfb);
 	vfb->usageFlags |= FB_USAGE_DISPLAYED_FRAMEBUFFER;
 	vfb->last_frame_displayed = gpuStats.totals.numFlips;
 	vfb->dirtyAfterDisplay = false;
@@ -1798,6 +1882,8 @@ void FramebufferManagerCommon::DecimateFBOs() {
 
 // Requires width/height to be set already.
 void FramebufferManagerCommon::ResizeFramebufFBO(VirtualFramebuffer *vfb, int w, int h, bool force, bool skipCopy) {
+	ResolveVideoMemoryOwner(vfb);
+	EnsureVideoCpuCurrent(vfb);
 	_dbg_assert_(w > 0);
 	_dbg_assert_(h > 0);
 	VirtualFramebuffer old = *vfb;
@@ -2399,7 +2485,7 @@ bool FramebufferManagerCommon::FindTransferFramebuffer(u32 basePtr, int stride_p
 	}
 }
 
-VirtualFramebuffer *FramebufferManagerCommon::CreateRAMFramebuffer(uint32_t fbAddress, int width, int height, int stride, GEBufferFormat format) {
+VirtualFramebuffer *FramebufferManagerCommon::CreateRAMFramebuffer(uint32_t fbAddress, int width, int height, int stride, GEBufferFormat format, bool visibleWidthOnly) {
 	INFO_LOG(Log::FrameBuf, "Creating RAM framebuffer at %08x (%dx%d, stride %d, fb_format %d)", fbAddress, width, height, stride, format);
 
 	RasterChannel channel = format == GE_FORMAT_DEPTH16 ? RASTER_DEPTH : RASTER_COLOR;
@@ -2421,7 +2507,7 @@ VirtualFramebuffer *FramebufferManagerCommon::CreateRAMFramebuffer(uint32_t fbAd
 		vfb->fb_stride = stride;
 		vfb->z_address = 0;
 		vfb->z_stride = 0;
-		vfb->width = std::max(width, stride);
+		vfb->width = visibleWidthOnly ? width : std::max(width, stride);
 	}
 	vfb->height = height;
 	vfb->newWidth = vfb->width;
@@ -2604,6 +2690,11 @@ void FramebufferManagerCommon::ApplyClearToMemory(int x1, int y1, int x2, int y2
 }
 
 bool FramebufferManagerCommon::NotifyBlockTransferBefore(u32 dstBasePtr, int dstStride, int dstX, int dstY, u32 srcBasePtr, int srcStride, int srcX, int srcY, int width, int height, int bpp, u32 skipDrawReason) {
+	if (HasVideoMemory(srcBasePtr, (srcY + height) * srcStride * bpp)
+		|| HasVideoMemory(dstBasePtr, (dstY + height) * dstStride * bpp)) {
+		ResolveAllVideoMemory();
+		return false;
+	}
 	if (!useBufferedRendering_) {
 		return false;
 	}
@@ -3271,6 +3362,7 @@ bool FramebufferManagerCommon::ReadbackStencilbuffer(Draw::Framebuffer *fbo, int
 }
 
 void FramebufferManagerCommon::ReadFramebufferToMemory(VirtualFramebuffer *vfb, int x, int y, int w, int h, RasterChannel channel, Draw::ReadbackMode mode, const char *tag) {
+	EnsureVideoCpuCurrent(vfb);
 	if (!vfb || !vfb->fbo) {
 		return;
 	}
@@ -3492,6 +3584,8 @@ void FramebufferManagerCommon::DrawActiveTexture(float x, float y, float w, floa
 }
 
 void FramebufferManagerCommon::BlitFramebuffer(VirtualFramebuffer *dst, int dstX, int dstY, VirtualFramebuffer *src, int srcX, int srcY, int w, int h, int bpp, RasterChannel channel, const char *tag) {
+	EnsureVideoCpuCurrent(src);
+	EnsureVideoCpuCurrent(dst);
 	if (!dst->fbo || !src->fbo || !useBufferedRendering_) {
 		// This can happen if they recently switched from non-buffered.
 		return;

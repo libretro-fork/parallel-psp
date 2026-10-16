@@ -21,6 +21,7 @@
 
 #include "Common/CommonTypes.h"
 
+struct video_hw_frame;
 struct rh264_video;
 struct retro_video_decode_interface;
 struct retro_video_decode_frame;
@@ -51,6 +52,7 @@ public:
 
 	// Download a deferred frame once, before accessing its CPU planes.
 	bool Materialize();
+	bool ExportGpuFrame(video_hw_frame *frame);
 
 	// Throws away any decoder state, for a seek or a new stream.
 	void Flush();
@@ -87,6 +89,7 @@ private:
 	int strides_[3]{};
 	bool haveFrame_ = false;
 	bool pendingPlanes_ = false;
+	bool gpuExported_ = false;
 	int lastResult_ = 0;
 	// For reporting runs of refused access units rather than one line each - see Decode.
 	bool wasFailing_ = false;

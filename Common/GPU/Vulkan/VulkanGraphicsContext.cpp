@@ -158,6 +158,17 @@ private:
 	uint32_t next_ = 0;
 };
 
+bool CreateVulkanOffscreenPresentation(VulkanContext *context, int width, int height) {
+	auto presentation = std::make_unique<VulkanOffscreenPresentation>(VK_FORMAT_B8G8R8A8_UNORM,
+		VkExtent2D{(uint32_t)width, (uint32_t)height});
+	if (!presentation->Create(context)) {
+		presentation->Destroy(context);
+		return false;
+	}
+	context->SetPresentation(std::move(presentation));
+	return true;
+}
+
 bool VulkanGraphicsContext::InitAPI(void *wnd, std::string *deviceName, std::string *errorMessage) {
 	*errorMessage = "N/A";
 	_dbg_assert_(deviceName);
@@ -213,13 +224,10 @@ bool VulkanGraphicsContext::InitAPI(void *wnd, std::string *deviceName, std::str
 
 bool VulkanGraphicsContext::InitSurface(WindowSystem winsys, void *data1, void *data2, std::string *errorMessage) {
 	if (offscreenWidth_ > 0) {
-		auto presentation = std::make_unique<VulkanOffscreenPresentation>(VK_FORMAT_B8G8R8A8_UNORM, VkExtent2D{ (uint32_t)offscreenWidth_, (uint32_t)offscreenHeight_ });
-		if (!presentation->Create(vulkan_)) {
-			presentation->Destroy(vulkan_);
+		if (!CreateVulkanOffscreenPresentation(vulkan_, offscreenWidth_, offscreenHeight_)) {
 			*errorMessage = "Failed to create the offscreen images";
 			return false;
 		}
-		vulkan_->SetPresentation(std::move(presentation));
 	} else {
 		// Don't proceed on failure - without a surface there's no present mode, no swapchain and no queue,
 		// so everything below would just fail in more confusing ways further down (it used to assert deep

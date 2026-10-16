@@ -113,6 +113,9 @@ struct GPUStatsPerFrame {
 	int numTextureDataBytesHashed;
 	int numTexturesDecoded;
 	int numVideoTextures;
+	int numVideoSurfaceWrites;
+	int numVideoReadbacks;
+	int numVideoCpuUpdates;
 	int numFramebufferEvaluations;
 	int numFBOsCreated;
 	int numBlockingReadbacks;

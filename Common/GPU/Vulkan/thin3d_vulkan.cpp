@@ -30,6 +30,7 @@
 #include "Common/GPU/Vulkan/VulkanRenderManager.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanImage.h"
+#include "Common/GPU/Vulkan/VulkanVideoSurface.h"
 #include "Common/GPU/Vulkan/VulkanMemory.h"
 #include "Common/GPU/Vulkan/VulkanLoader.h"
 #include "Common/Thread/Promise.h"
@@ -352,6 +353,14 @@ public:
 		return VK_NULL_HANDLE;  // This would be bad.
 	}
 
+	void AdoptVideoImage(VulkanTexture *image, VulkanTexture *original) {
+		videoPlanes_ = original;
+		vkTex_ = image;
+		width_ = image->GetWidth(); height_ = image->GetHeight(); depth_ = 1;
+	}
+	VulkanTexture *VideoImage() const { return vkTex_; }
+	VulkanTexture *VideoPlanes() const { return videoPlanes_; }
+
 	int NumLevels() const {
 		return mipLevels_;
 	}
@@ -360,6 +369,8 @@ private:
 	void UpdateInternal(VkCommandBuffer cmd, VulkanPushPool *pushBuffer, const uint8_t *const *data, TextureCallback callback, int numLevels);
 
 	void Destroy() {
+		delete videoPlanes_;
+		videoPlanes_ = nullptr;
 		if (vkTex_) {
 			vkTex_->Destroy();
 			delete vkTex_;
@@ -369,6 +380,7 @@ private:
 
 	VulkanContext *vulkan_;
 	VulkanTexture *vkTex_ = nullptr;
+	VulkanTexture *videoPlanes_ = nullptr;
 
 	int mipLevels_ = 0;
 };
@@ -425,6 +437,19 @@ public:
 	ShaderModule *CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag) override;
 
 	Texture *CreateTexture(const TextureDesc &desc) override;
+	bool BeginVideoMemoryAccess() override {
+		if (renderManager_.InsideFrame()) return false;
+		BeginFrame(DebugFlags::NONE);
+		return true;
+	}
+	void EndVideoMemoryAccess(bool temporaryFrame) override {
+		if (temporaryFrame) { EndFrame(); Present(); }
+	}
+	bool SupportsVideoImport() const override { return true; }
+	Texture *ImportVideoFrame(const video_hw_frame_t &frame) override;
+	bool ReadVideoTexture(Texture *texture, uint8_t *pixels, int stride) override;
+	bool ReadVideoPlanes(Texture *texture, uint8_t *pixels, int stride) override;
+	bool DeferVideoDecoderClose(void (*close)(void *), void *decoder) override;
 	Buffer *CreateBuffer(size_t size, uint32_t usageFlags) override;
 	Framebuffer *CreateFramebuffer(const FramebufferDesc &desc) override;
 
@@ -544,6 +569,7 @@ private:
 	VulkanContext *vulkan_ = nullptr;
 
 	int frameCount_ = 0;
+	std::unique_ptr<VulkanVideoSurface> videoSurface_;
 	VulkanRenderManager renderManager_;
 
 	VulkanTexture *nullTexture_ = nullptr;
@@ -1362,6 +1388,63 @@ Texture *VKContext::CreateTexture(const TextureDesc &desc) {
 		tex->Release();
 		return nullptr;
 	}
+}
+
+Texture *VKContext::ImportVideoFrame(const video_hw_frame_t &frame) {
+	if (frame.api != VIDEO_HW_API_VULKAN || !frame.width || !frame.height
+		|| frame.width > 2048 || frame.height > 2048)
+		return nullptr;
+	if (!videoSurface_) videoSurface_.reset(new VulkanVideoSurface(vulkan_));
+	if (!videoSurface_->Init()) return nullptr;
+	auto *image = new VulkanTexture(vulkan_, "Video surface");
+	if (!image->CreateDirect(frame.width, frame.height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+		nullptr)) {
+		delete image;
+		return nullptr;
+	}
+	auto *original = new VulkanTexture(vulkan_, "Original video planes");
+	if (!original->CreateDirect(frame.width, frame.height, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, nullptr)) {
+		delete original; delete image; return nullptr;
+	}
+	auto *task = videoSurface_->Prepare(frame, image, original);
+	if (!task) { delete original; delete image; return nullptr; }
+	TextureDesc desc{};
+	desc.width = frame.width; desc.height = frame.height; desc.depth = 1;
+	desc.mipLevels = 1; desc.format = DataFormat::R8G8B8A8_UNORM;
+	auto *texture = new VKTexture(vulkan_, desc);
+	texture->AdoptVideoImage(image, original);
+	renderManager_.QueueGpuCallback(VulkanVideoSurface::Record, VulkanVideoSurface::Dispose, task);
+	return texture;
+}
+
+bool VKContext::ReadVideoTexture(Texture *texture, uint8_t *pixels, int stride) {
+	if (!texture || !pixels) return false;
+	auto *image = ((VKTexture *)texture)->VideoImage();
+	if (!image || stride < image->GetWidth()) return false;
+	const bool temporaryFrame = BeginVideoMemoryAccess();
+	renderManager_.CopyImageToMemorySync(image->GetImage(), 0, 0, 0, image->GetWidth(), image->GetHeight(),
+		DataFormat::R8G8B8A8_UNORM, pixels, stride, "Video CPU access");
+	EndVideoMemoryAccess(temporaryFrame);
+	return true;
+}
+
+bool VKContext::ReadVideoPlanes(Texture *texture, uint8_t *pixels, int stride) {
+	if (!texture || !pixels) return false;
+	auto *image = ((VKTexture *)texture)->VideoPlanes();
+	if (!image || stride < image->GetWidth()) return false;
+	const bool temporaryFrame = BeginVideoMemoryAccess();
+	renderManager_.CopyImageToMemorySync(image->GetImage(), 0, 0, 0, image->GetWidth(), image->GetHeight(),
+		DataFormat::R8G8B8A8_UNORM, pixels, stride, "Video YUV CPU access");
+	EndVideoMemoryAccess(temporaryFrame);
+	return true;
+}
+
+bool VKContext::DeferVideoDecoderClose(void (*close)(void *), void *decoder) {
+	if (!close || !decoder) return false;
+	vulkan_->Delete().QueueCallback([close, decoder](VulkanContext *) { close(decoder); });
+	return true;
 }
 
 void VKContext::UpdateTextureLevels(Texture *texture, const uint8_t **data, TextureCallback initDataCallback, int numLevels) {

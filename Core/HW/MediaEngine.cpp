@@ -24,6 +24,9 @@
 #include "Core/System.h"
 #include "Core/Debugger/MemBlockInfo.h"
 #include "Core/HW/AvcDecoder.h"
+#include "Core/HW/VideoMemory.h"
+#include "GPU/GPUCommon.h"
+#include "Common/GPU/thin3d.h"
 #include "Core/HW/MediaEngine.h"
 #include "Core/HLE/sceMpegbase.h"
 #include "Core/MemMap.h"
@@ -56,13 +59,32 @@ static int getPixelFormatBytes(int pspFormat)
 	}
 }
 
+// MediaEngine instances and graphics context transitions share the emulation thread.
+static std::vector<MediaEngine *> videoEngines;
+
+void MediaEngine::ReleaseGpuFrames() {
+	for (auto *engine : videoEngines) {
+		if (engine->m_gpuVideoFrame) {
+			if (!engine->ensureFramePixels()) {
+				ERROR_LOG(Log::ME, "Could not preserve the video frame during device loss");
+				memset(engine->m_buffer, 0, (size_t)engine->m_desWidth * engine->m_desHeight * 4);
+				engine->m_cpuFrameReady = true;
+			}
+			engine->m_gpuVideoFrame->Release();
+			engine->m_gpuVideoFrame = nullptr;
+		}
+	}
+}
+
 MediaEngine::MediaEngine() {
+	videoEngines.push_back(this);
 	m_mpegheaderSize = sizeof(m_mpegheader);
 	m_audioType = PSP_CODEC_AT3PLUS; // in movie, we use only AT3+ audio
 }
 
 MediaEngine::~MediaEngine() {
 	closeMedia();
+	videoEngines.erase(std::remove(videoEngines.begin(), videoEngines.end(), this), videoEngines.end());
 }
 
 void MediaEngine::closeMedia() {
@@ -217,6 +239,10 @@ bool MediaEngine::openContext(bool keepReadPos) {
 }
 
 void MediaEngine::closeContext() {
+	if (m_gpuVideoFrame) m_gpuVideoFrame->Release();
+	m_gpuVideoFrame = nullptr;
+	m_cpuFrameReady = true;
+	m_gpuVideoWrite = false;
 	delete[] m_buffer;
 	m_buffer = nullptr;
 	if (m_psmf)
@@ -463,7 +489,16 @@ void MediaEngine::dropOldestPts() {
 }
 
 bool MediaEngine::frameDecoded(int videoPixelMode, bool skipFrame) {
-	if (!skipFrame && !m_avc->Materialize())
+	Draw::Texture *surface = nullptr;
+	Draw::DrawContext *draw = gpu ? gpu->GetDrawContext() : nullptr;
+	if (!skipFrame && videoPixelMode == GE_CMODE_32BIT_ABGR8888 && draw && draw->SupportsVideoImport() && CanDeferVideoMemory()) {
+		video_hw_frame_t exported{};
+		if (m_avc->ExportGpuFrame(&exported)) {
+			surface = draw->ImportVideoFrame(exported);
+			if (!surface) video_hw_frame_abandon(&exported);
+		}
+	}
+	if (!skipFrame && !surface && !m_avc->Materialize())
 		return false;
 	// Shown in time stamp order: the frame out is the earliest unit not yet shown.
 	s64 pts = -1;
@@ -481,13 +516,19 @@ bool MediaEngine::frameDecoded(int videoPixelMode, bool skipFrame) {
 
 	const int width = m_avc->Width(), height = m_avc->Height();
 	if (!m_buffer || width != m_desWidth || height != m_desHeight) {
+		if (m_gpuVideoFrame) m_gpuVideoFrame->Release();
+		m_gpuVideoFrame = nullptr;
+		m_cpuFrameReady = true;
 		delete[] m_buffer;
 		m_desWidth = width;
 		m_desHeight = height;
 		m_buffer = new u8[(size_t)width * height * 4]();
 	}
 	if (!skipFrame) {
-		MpegCscPlanes(m_buffer, m_desWidth, videoPixelMode,
+		if (m_gpuVideoFrame) m_gpuVideoFrame->Release();
+		m_gpuVideoFrame = surface;
+		m_cpuFrameReady = !surface;
+		if (!surface) MpegCscPlanes(m_buffer, m_desWidth, videoPixelMode,
 			m_avc->Plane(0), m_avc->Stride(0), m_avc->Plane(1), m_avc->Plane(2), m_avc->Stride(1),
 			0, 0, width, height);
 	}
@@ -558,8 +599,14 @@ bool MediaEngine::decodeAccessUnit(const u8 *data, int size, int videoPixelMode)
 		m_avc = new AvcDecoder();
 	if (!m_avc->Decode(data, size))
 		return false;
+	if (m_gpuVideoFrame) m_gpuVideoFrame->Release();
+	m_gpuVideoFrame = nullptr;
+	m_cpuFrameReady = true;
 	const int width = m_avc->Width(), height = m_avc->Height();
 	if (!m_buffer || width != m_desWidth || height != m_desHeight) {
+		if (m_gpuVideoFrame) m_gpuVideoFrame->Release();
+		m_gpuVideoFrame = nullptr;
+		m_cpuFrameReady = true;
 		delete[] m_buffer;
 		m_desWidth = width;
 		m_desHeight = height;
@@ -633,7 +680,23 @@ inline void writeVideoLineABGR4444(void *destp, const void *srcp, int width) {
 	}
 }
 
+bool MediaEngine::ensureFramePixels() {
+	if (m_cpuFrameReady) return m_buffer != nullptr;
+	Draw::DrawContext *draw = gpu ? gpu->GetDrawContext() : nullptr;
+	if (!draw || !draw->ReadVideoTexture(m_gpuVideoFrame, m_buffer, m_desWidth))
+		return false;
+	m_cpuFrameReady = true;
+	return true;
+}
+
 int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMode) {
+	m_gpuVideoWrite = false;
+	if (m_gpuVideoFrame && gpu && videoPixelMode == GE_CMODE_32BIT_ABGR8888
+		&& gpu->WriteVideoTexture(bufferPtr, frameWidth, m_desWidth, m_desHeight, m_gpuVideoFrame)) {
+		m_gpuVideoWrite = true;
+		return frameWidth * m_desHeight * 4;
+	}
+	if (!ensureFramePixels()) return 0;
 	int videoLineSize = 0;
 	switch (videoPixelMode) {
 	case GE_CMODE_32BIT_ABGR8888:
@@ -654,6 +717,7 @@ int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMo
 		return 0;
 	}
 
+	Memory::PrepareVideoMemoryAccess(bufferPtr, videoImageSize);
 	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
 
 	if (!m_buffer)
@@ -721,6 +785,8 @@ int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMo
 
 int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int videoPixelMode,
 	                             int xpos, int ypos, int width, int height) {
+	m_gpuVideoWrite = false;
+	if (!ensureFramePixels()) return 0;
 	int videoLineSize = 0;
 	switch (videoPixelMode) {
 	case GE_CMODE_32BIT_ABGR8888:
@@ -740,6 +806,7 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 		return 0;
 	}
 
+	Memory::PrepareVideoMemoryAccess(bufferPtr, videoImageSize);
 	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
 
 	if (!m_buffer)
@@ -818,7 +885,7 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 }
 
 u8 *MediaEngine::getFrameImage() {
-	return m_buffer;
+	return ensureFramePixels() ? m_buffer : nullptr;
 }
 
 int MediaEngine::getRemainSize() {

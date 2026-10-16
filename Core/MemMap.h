@@ -39,6 +39,12 @@
 //#define SAFE_MEMORY
 #endif
 
+#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#include <retro_atomic.h>
+extern retro_atomic_int_t g_videoMemoryPending;
+bool ResolveVideoMemory(uint32_t address, uint32_t size);
+#endif
+
 // Global declarations
 class PointerWrap;
 
@@ -71,6 +77,15 @@ typedef void (*readFn32)(u32&, const u32);
 typedef void (*readFn64)(u64&, const u32);
 
 namespace Memory {
+// Native accesses must make GPU side effects visible to the C++ compiler too.
+// Generated JIT accesses use the protected memory mappings instead.
+inline void PrepareVideoMemoryAccess(u32 address, u32 size) {
+#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+	if (retro_atomic_load_acquire_int(&g_videoMemoryPending))
+		::ResolveVideoMemory(address, size);
+#endif
+}
+
 // Base is a pointer to the base of the memory map. Yes, some MMU tricks
 // are used to set up a full GC or Wii memory map in process memory.	on
 // 32-bit, you have to mask your offsets with 0x3FFFFFFF. This means that
@@ -153,6 +168,7 @@ u16 ReadOrException_U16(const u32 _Address);
 u32 ReadOrException_U32(const u32 _Address);
 
 inline u8* GetPointerWriteUnchecked(const u32 address) {
+	PrepareVideoMemoryAccess(address, 1);
 #ifdef MASKED_PSP_MEMORY
 	return (u8 *)(base + (address & MEMVIEW32_MASK));
 #else
@@ -161,6 +177,7 @@ inline u8* GetPointerWriteUnchecked(const u32 address) {
 }
 
 inline const u8* GetPointerUnchecked(const u32 address) {
+	PrepareVideoMemoryAccess(address, 1);
 #ifdef MASKED_PSP_MEMORY
 	return (const u8 *)(base + (address & MEMVIEW32_MASK));
 #else
@@ -169,6 +186,7 @@ inline const u8* GetPointerUnchecked(const u32 address) {
 }
 
 inline u64 ReadUnchecked_U64(const u32 address) {
+	PrepareVideoMemoryAccess(address, 8);
 #ifdef MASKED_PSP_MEMORY
 	return *(u64_le *)(base + (address & MEMVIEW32_MASK));
 #else
@@ -177,6 +195,7 @@ inline u64 ReadUnchecked_U64(const u32 address) {
 }
 
 inline u32 ReadUnchecked_U32(const u32 address) {
+	PrepareVideoMemoryAccess(address, 4);
 #ifdef MASKED_PSP_MEMORY
 	return *(u32_le *)(base + (address & MEMVIEW32_MASK));
 #else
@@ -185,6 +204,7 @@ inline u32 ReadUnchecked_U32(const u32 address) {
 }
 
 inline float ReadUnchecked_Float(const u32 address) {
+	PrepareVideoMemoryAccess(address, 4);
 #ifdef MASKED_PSP_MEMORY
 	return *(float_le *)(base + (address & MEMVIEW32_MASK));
 #else
@@ -193,6 +213,7 @@ inline float ReadUnchecked_Float(const u32 address) {
 }
 
 inline u16 ReadUnchecked_U16(const u32 address) {
+	PrepareVideoMemoryAccess(address, 2);
 #ifdef MASKED_PSP_MEMORY
 	return *(u16_le *)(base + (address & MEMVIEW32_MASK));
 #else
@@ -201,6 +222,7 @@ inline u16 ReadUnchecked_U16(const u32 address) {
 }
 
 inline u8 ReadUnchecked_U8(const u32 address) {
+	PrepareVideoMemoryAccess(address, 1);
 #ifdef MASKED_PSP_MEMORY
 	return (*(u8 *)(base + (address & MEMVIEW32_MASK)));
 #else
@@ -209,6 +231,7 @@ inline u8 ReadUnchecked_U8(const u32 address) {
 }
 
 inline void WriteUnchecked_U64(u64 data, u32 address) {
+	PrepareVideoMemoryAccess(address, 8);
 #ifdef MASKED_PSP_MEMORY
 	*(u64_le *)(base + (address & MEMVIEW32_MASK)) = data;
 #else
@@ -217,6 +240,7 @@ inline void WriteUnchecked_U64(u64 data, u32 address) {
 }
 
 inline void WriteUnchecked_U32(u32 data, u32 address) {
+	PrepareVideoMemoryAccess(address, 4);
 #ifdef MASKED_PSP_MEMORY
 	*(u32_le *)(base + (address & MEMVIEW32_MASK)) = data;
 #else
@@ -225,6 +249,7 @@ inline void WriteUnchecked_U32(u32 data, u32 address) {
 }
 
 inline void WriteUnchecked_Float(float data, u32 address) {
+	PrepareVideoMemoryAccess(address, 4);
 #ifdef MASKED_PSP_MEMORY
 	*(float_le *)(base + (address & MEMVIEW32_MASK)) = data;
 #else
@@ -233,6 +258,7 @@ inline void WriteUnchecked_Float(float data, u32 address) {
 }
 
 inline void WriteUnchecked_U16(u16 data, u32 address) {
+	PrepareVideoMemoryAccess(address, 2);
 #ifdef MASKED_PSP_MEMORY
 	*(u16_le *)(base + (address & MEMVIEW32_MASK)) = data;
 #else
@@ -241,6 +267,7 @@ inline void WriteUnchecked_U16(u16 data, u32 address) {
 }
 
 inline void WriteUnchecked_U8(u8 data, u32 address) {
+	PrepareVideoMemoryAccess(address, 1);
 #ifdef MASKED_PSP_MEMORY
 	(*(u8 *)(base + (address & MEMVIEW32_MASK))) = data;
 #else
@@ -296,14 +323,17 @@ inline bool IsKernelAndNotVolatileAddress(const u32 address) {
 bool IsScratchpadAddress(const u32 address);
 
 inline void MemcpyUnchecked(void *to_data, const u32 from_address, const u32 len) {
+	PrepareVideoMemoryAccess(from_address, len);
 	memcpy(to_data, GetPointerUnchecked(from_address), len);
 }
 
 inline void MemcpyUnchecked(const u32 to_address, const void *from_data, const u32 len) {
+	PrepareVideoMemoryAccess(to_address, len);
 	memcpy(GetPointerWriteUnchecked(to_address), from_data, len);
 }
 
 inline void MemcpyUnchecked(const u32 to_address, const u32 from_address, const u32 len) {
+	PrepareVideoMemoryAccess(to_address, len);
 	MemcpyUnchecked(GetPointerWriteUnchecked(to_address), from_address, len);
 }
 

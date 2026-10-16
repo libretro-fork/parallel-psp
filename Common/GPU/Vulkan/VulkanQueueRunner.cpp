@@ -236,6 +236,10 @@ void VulkanQueueRunner::PreprocessSteps(std::vector<VKRStep *> &steps) {
 		}
 	}
 
+	for (auto *step : steps)
+		if (step->stepType == VKRStepType::GPU_CALLBACK)
+			return;
+
 	for (int j = 0; j < (int)steps.size() - 1; j++) {
 		// Push down empty "Clear/Store" renderpasses, and merge them with the first "Load/Store" to the same framebuffer.
 		decltype(steps[j]->render) &render_j = steps[j]->render;
@@ -369,6 +373,9 @@ void VulkanQueueRunner::RunSteps(std::vector<VKRStep *> &steps, int curFrame, Fr
 			}
 			break;
 		}
+		case VKRStepType::GPU_CALLBACK:
+			step.callback.record(step.callback.context, cmd, frameData);
+			break;
 		case VKRStepType::COPY:
 			PerformCopy(step, cmd);
 			break;
@@ -752,6 +759,8 @@ std::string VulkanQueueRunner::StepToString(VulkanContext *vulkan, const VKRStep
 	case VKRStepType::READBACK_IMAGE:
 		snprintf(buffer, sizeof(buffer), "READBACK_IMAGE '%s' (%dx%d)", step.tag, step.readback_image.srcRect.extent.width, step.readback_image.srcRect.extent.height);
 		break;
+	case VKRStepType::GPU_CALLBACK:
+		return "GPU video conversion";
 	case VKRStepType::RENDER_SKIP:
 		snprintf(buffer, sizeof(buffer), "(RENDER_SKIP) %s", step.tag);
 		break;
@@ -875,6 +884,8 @@ void VulkanQueueRunner::LogSteps(const std::vector<VKRStep *> &steps, bool verbo
 			break;
 		case VKRStepType::READBACK_IMAGE:
 			LogReadbackImage(step);
+			break;
+		case VKRStepType::GPU_CALLBACK:
 			break;
 		case VKRStepType::RENDER_SKIP:
 			INFO_LOG(Log::G3D, "(skipped render pass)");

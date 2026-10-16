@@ -148,6 +148,7 @@ option(MOBILE_DEVICE "Set to ON when targeting a mobile device" ${MOBILE_DEVICE}
 # Set by b.sh for the loongarch64/riscv64 cross builds, whose sysroots have no SDL3.
 option(ATLAS_TOOL "Set to OFF to not generate the ATLAS_TOOL target" ${ATLAS_TOOL})
 option(UNITTEST "Set to ON to generate the unittest target" ${UNITTEST})
+option(VIDEO_SURFACE_GPU_TEST "Enable the real Vulkan video surface regression test" OFF)
 option(SIMULATOR "Set to ON when targeting an x86 simulator of an ARM platform" ${SIMULATOR})
 # :: Options
 option(USE_LIBNX "Set to ON to build for Switch(libnx)" OFF)
@@ -595,6 +596,8 @@ if(UNITTEST)
 		unittest/TestShaderGenerators.cpp
 		unittest/TestBuiltinVulkanShaders.cpp
 		unittest/TestGPUReadback.cpp
+		unittest/TestVideoMemoryHost.cpp
+		unittest/TestVideoMemory.cpp
 		unittest/TestVideoDecode.cpp
 		unittest/TestArmEmitter.cpp
 		unittest/TestArm64Emitter.cpp
@@ -634,6 +637,10 @@ if(UNITTEST)
 	if(WIN32)
 		target_link_libraries(PPSSPPUnitTest d2d1 dwrite d3d11 d3d9 opengl32)
 	endif()
+	if(VIDEO_SURFACE_GPU_TEST AND VULKAN)
+		target_sources(PPSSPPUnitTest PRIVATE unittest/TestVulkanVideoSurface.cpp)
+		target_compile_definitions(PPSSPPUnitTest PRIVATE PPSSPP_VIDEO_SURFACE_GPU_TEST)
+	endif()
 	setup_target_project(PPSSPPUnitTest unittest)
 	add_test(arm64_emitter PPSSPPUnitTest Arm64Emitter)
 	add_test(arm_emitter PPSSPPUnitTest ArmEmitter)
@@ -654,6 +661,8 @@ if(UNITTEST)
 	add_test(builtin_vulkan_shaders PPSSPPUnitTest BuiltinVulkanShaders)
 	add_test(builtin_texture_shaders PPSSPPUnitTest BuiltinTextureShaders)
 	add_test(builtin_depal_shaders PPSSPPUnitTest BuiltinDepalShaders)
+	add_test(video_memory_host PPSSPPUnitTest VideoMemoryHost)
+	add_test(video_memory PPSSPPUnitTest VideoMemory)
 	add_test(deferred_video_decode PPSSPPUnitTest DeferredVideoDecode)
 	add_test(vulkan_readback_plan PPSSPPUnitTest VulkanReadbackPlan)
 	add_test(d3d11_readback PPSSPPUnitTest D3D11Readback)

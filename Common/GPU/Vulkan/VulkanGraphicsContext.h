@@ -22,6 +22,7 @@
 
 class VulkanContext;
 class VulkanRenderManager;
+bool CreateVulkanOffscreenPresentation(VulkanContext *context, int width, int height);
 
 class VulkanGraphicsContext : public GraphicsContext {
 public:

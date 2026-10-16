@@ -2807,6 +2807,11 @@ bool TestBuiltinTextureShaders();
 bool TestBuiltinDepalShaders();
 bool TestBuiltinGameVertexShaders();
 bool TestBuiltinGameFragmentShaders();
+#ifdef PPSSPP_VIDEO_SURFACE_GPU_TEST
+bool TestVulkanVideoSurface();
+#endif
+bool TestVideoMemoryHost();
+bool TestVideoMemory();
 bool TestDeferredVideoDecode();
 bool TestVulkanReadbackPlan();
 bool TestD3D11Readback();
@@ -3035,6 +3040,8 @@ TestItem availableTests[] = {
 	TEST_ITEM(BuiltinDepalShaders),
 	TEST_ITEM(BuiltinGameVertexShaders),
 	TEST_ITEM(BuiltinGameFragmentShaders),
+	TEST_ITEM(VideoMemoryHost),
+	TEST_ITEM(VideoMemory),
 	TEST_ITEM(DeferredVideoDecode),
 	TEST_ITEM(VulkanReadbackPlan),
 	TEST_ITEM(D3D11Readback),
@@ -3072,9 +3079,15 @@ TestItem availableTests[] = {
 	TEST_ITEM(Demangle),
 	TEST_ITEM(TextureReplacer),
 	TEST_ITEM(FatShortNames),
+#ifdef PPSSPP_VIDEO_SURFACE_GPU_TEST
+	TEST_ITEM(VulkanVideoSurface),
+#endif
 };
 
 int main(int argc, const char *argv[]) {
+#ifdef PPSSPP_VIDEO_SURFACE_GPU_TEST
+	setvbuf(stdout, nullptr, _IONBF, 0);
+#endif
 	// Never block on a modal dialog - these get run from CI and from tooling.
 	SetupCRT(true);
 	SetCurrentThreadName("UnitTest");

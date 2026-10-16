@@ -152,6 +152,7 @@ SOURCES_CXX += \
 	$(COMMONDIR)/GPU/Vulkan/VulkanLoader.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanContext.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanDebug.cpp \
+	$(COMMONDIR)/GPU/Vulkan/VulkanVideoSurface.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanImage.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanFramebuffer.cpp \
 	$(COMMONDIR)/GPU/Vulkan/VulkanMemory.cpp \
@@ -459,6 +460,9 @@ SOURCES_CXX += \
 	       $(COREDIR)/HW/SimpleAudioDec.cpp \
 	       $(COREDIR)/HW/Atrac3Standalone.cpp \
 	       $(COREDIR)/HW/AsyncIOManager.cpp \
+	       $(COREDIR)/HW/VideoMemoryHost.cpp \
+	       $(COREDIR)/HW/TiledVideoSurface.cpp \
+	       $(COREDIR)/HW/VideoMemory.cpp \
 	       $(COREDIR)/HW/AvcDecoder.cpp \
 	       $(COREDIR)/HW/MediaEngine.cpp \
 	       $(COREDIR)/HW/MpegDemux.cpp \

@@ -965,6 +965,15 @@ void VulkanRenderManager::EndCurRenderStep() {
 	curPipelineFlags_ = (PipelineFlags)0;
 }
 
+void VulkanRenderManager::QueueGpuCallback(void (*record)(void *, VkCommandBuffer, ::FrameData &),
+	void (*dispose)(void *), void *context) {
+	EndCurRenderStep();
+	auto *step = new VKRStep(VKRStepType::GPU_CALLBACK);
+	step->tag = "Video conversion";
+	step->callback = {record, dispose, context};
+	steps_.push_back(step);
+}
+
 void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRRenderPassLoadAction colorLoad, VKRRenderPassLoadAction depthLoad, VKRRenderPassLoadAction stencilLoad, uint32_t clearColor, float clearDepth, uint8_t clearStencil, const char *tag) {
 	_dbg_assert_(insideFrame_);
 

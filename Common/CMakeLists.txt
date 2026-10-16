@@ -194,6 +194,9 @@ add_library(Common STATIC
 	GPU/Vulkan/VulkanDescSet.h
 	GPU/Vulkan/VulkanFramebuffer.cpp
 	GPU/Vulkan/VulkanFramebuffer.h
+	GPU/Vulkan/VulkanVideoSurface.cpp
+	GPU/Vulkan/VulkanVideoSurface.h
+	GPU/Vulkan/VulkanVideoSurfaceSpv.h
 	GPU/Vulkan/VulkanImage.cpp
 	GPU/Vulkan/VulkanImage.h
 	GPU/Vulkan/VulkanLoader.cpp

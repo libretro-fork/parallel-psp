@@ -36,6 +36,10 @@
 #include "Core/HLE/ReplaceTables.h"
 #include "Core/MemMap.h"
 #include "Core/MemFault.h"
+#include "Core/HW/VideoMemory.h"
+#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#include "Common/CommonWindows.h"
+#endif
 #include "Core/MIPS/MIPS.h"
 #include "Core/MIPS/JitCommon/JitCommon.h"
 #include "Common/Thread/ParallelLoop.h"
@@ -125,6 +129,48 @@ static MemoryView views[] = {
 	// TODO: There are a few swizzled mirrors of VRAM, not sure about the best way to
 	// implement those.
 };
+
+bool ProtectVideoPages(uint32_t address, uint32_t size, bool protect) {
+#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+	address = VideoMemory::CanonicalAddress(address);
+	const bool vram = address >= 0x04000000 && (uint64_t)address + size <= 0x04200000;
+	const bool ram = address >= 0x08000000 && (uint64_t)address + size <= (uint64_t)0x08000000 + g_MemorySize;
+	if (!ram && !vram) return false;
+	bool found = false, success = true;
+	for (const auto &view : views) {
+		const bool vramView = (view.virtual_address & 0x3F800000) == 0x04000000;
+		if (!(view.flags & (MV_IS_PRIMARY_RAM | MV_IS_EXTRA1_RAM | MV_IS_EXTRA2_RAM)) && !vramView)
+			continue;
+		if (!*view.out_ptr || !view.size) continue;
+		const uint32_t start = VideoMemory::CanonicalAddress(view.virtual_address);
+		const uint64_t lo = std::max((uint64_t)address, (uint64_t)start);
+		const uint64_t hi = std::min((uint64_t)address + size, (uint64_t)start + view.size);
+		if (hi <= lo) continue;
+		DWORD oldProtection;
+		if (!VirtualProtect(*view.out_ptr + (lo - start), hi - lo,
+			protect ? PAGE_NOACCESS : PAGE_READWRITE, &oldProtection)) success = false;
+		found = true;
+	}
+	if (protect && !success) ProtectVideoPages(address, size, false);
+	return found && success;
+#else
+	return false;
+#endif
+}
+
+bool VideoGuestAddress(uintptr_t hostAddress, uint32_t *guestAddress) {
+	for (const auto &view : views) {
+		const bool vramView = (view.virtual_address & 0x3F800000) == 0x04000000;
+		if ((!(view.flags & (MV_IS_PRIMARY_RAM | MV_IS_EXTRA1_RAM | MV_IS_EXTRA2_RAM)) && !vramView) || !*view.out_ptr)
+			continue;
+		const uintptr_t start = (uintptr_t)*view.out_ptr;
+		if (hostAddress >= start && hostAddress - start < view.size) {
+			*guestAddress = VideoMemory::CanonicalAddress(view.virtual_address + (uint32_t)(hostAddress - start));
+			return true;
+		}
+	}
+	return false;
+}
 
 inline static bool CanIgnoreView(const MemoryView &view) {
 #ifdef MASKED_PSP_MEMORY
@@ -286,6 +332,7 @@ bool MemoryMap_Setup(MemMapSetupFlags flags) {
 }
 
 void MemoryMap_Shutdown() {
+	ResetVideoMemory();
 	size_t position = 0;
 	size_t last_position = 0;
 	const MemMapSetupFlags flags = g_setupFlags;
@@ -393,6 +440,10 @@ static void DoMemoryVoid(PointerWrap &p, uint32_t start, uint32_t size) {
 }
 
 void DoState(PointerWrap &p) {
+	if (p.mode != PointerWrap::MODE_MEASURE && p.mode != PointerWrap::MODE_NOOP && !ResolveAllVideoMemory()) {
+		p.SetError(PointerWrap::ERROR_FAILURE);
+		return;
+	}
 	auto s = p.Section("Memory", 1, 3);
 	if (!s)
 		return;

@@ -21,6 +21,9 @@
 #include "Core/HW/AvcDecoder.h"
 
 #include <climits>
+#include <cstring>
+#include "GPU/GPUCommon.h"
+#include "Common/GPU/thin3d.h"
 #include <formats/rh264.h>
 #include <libretro.h>
 
@@ -52,8 +55,12 @@ AvcDecoder::~AvcDecoder() {
 
 void AvcDecoder::Close() {
 	pendingPlanes_ = false;
-	if (frontendDecoder_)
-		frontend_->close(frontendDecoder_);
+	if (frontendDecoder_) {
+		Draw::DrawContext *draw = gpu ? gpu->GetDrawContext() : nullptr;
+		if (!gpuExported_ || !draw || !draw->DeferVideoDecoderClose(frontend_->close, frontendDecoder_))
+			frontend_->close(frontendDecoder_);
+	}
+	gpuExported_ = false;
 	frontendDecoder_ = nullptr;
 	if (dec_)
 		rh264_video_close(dec_);
@@ -179,6 +186,32 @@ bool AvcDecoder::Drain(bool deferPlanes) {
 		return false;
 	lastResult_ = TakeFrame() ? 1 : -2;
 	return lastResult_ == 1;
+}
+
+bool AvcDecoder::ExportGpuFrame(video_hw_frame *frame) {
+	if (!frame || !haveFrame_ || !pendingPlanes_ || !frontendDecoder_
+		|| frontend_->interface_version < 3 || !frontend_->get_gpu_frame) {
+		static bool reported = false;
+		if (!reported) { INFO_LOG(Log::ME, "GPU frame export unavailable (v%u, current=%d, pending=%d)", frontend_ ? frontend_->interface_version : 0, haveFrame_, pendingPlanes_); reported = true; }
+		return false;
+	}
+	retro_video_decode_gpu_frame exported{};
+	const int result = frontend_->get_gpu_frame(frontendDecoder_, &exported);
+	if (result != 1) {
+		static bool reported = false;
+		if (!reported) { INFO_LOG(Log::ME, "GPU frame export not ready (%d)", result); reported = true; }
+		return false;
+	}
+	if (exported.width != (unsigned)width_ || exported.height != (unsigned)height_
+		|| !exported.image || !exported.wait || !exported.done || !exported.abandon) {
+		if (exported.abandon) exported.abandon(exported.owner, exported.done, exported.done_value);
+		return false;
+	}
+	static_assert(sizeof(exported) == sizeof(*frame), "GPU frame ABI");
+	static_assert(offsetof(retro_video_decode_gpu_frame, api) == offsetof(video_hw_frame_t, api), "GPU frame layout");
+	memcpy(frame, &exported, sizeof(*frame));
+	gpuExported_ = true;
+	return true;
 }
 
 bool AvcDecoder::Materialize() {

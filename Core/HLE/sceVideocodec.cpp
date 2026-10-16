@@ -45,6 +45,7 @@
 #include "Core/HLE/sceMpegbase.h"
 #include "Core/HLE/scePower.h"
 #include "Core/HW/AvcDecoder.h"
+#include "Core/HW/TiledVideoSurface.h"
 #include "Core/MemMap.h"
 #include "Core/MIPS/MIPS.h"
 
@@ -141,10 +142,11 @@ bool MEIsValidRange(u32 addr, u32 size) {
 }
 
 u8 *MEGetPointerRange(u32 addr, u32 size) {
-	return MEIsValidRange(addr, size) ? g_meRam.data() + addr : nullptr;
+	return MEIsValidRange(addr, size) && ResolveTiledVideoMemory(addr, size) ? g_meRam.data() + addr : nullptr;
 }
 
 static void FreeContext(VideocodecCtx &ctx) {
+	DiscardTiledVideoMemory(ctx.frameBuffers, ctx.frameBuffersSize);
 	delete ctx.decoder;
 	ctx.decoder = nullptr;
 	if (ctx.edram) {
@@ -161,6 +163,7 @@ static void FreeContext(VideocodecCtx &ctx) {
 // these contexts were holding belong to a world that no longer exists and freeing them would be
 // freeing someone else's memory.
 static void ClearContexts(bool freeMemory) {
+	ClearTiledVideoSurfaces();
 	for (auto &[addr, ctx] : g_videocodecCtxs) {
 		if (freeMemory) {
 			FreeContext(ctx);
@@ -187,6 +190,10 @@ void __VideocodecShutdown() {
 }
 
 void __VideocodecDoState(PointerWrap &p) {
+	if (p.mode != PointerWrap::MODE_MEASURE && p.mode != PointerWrap::MODE_NOOP && !ResolveAllTiledVideoSurfaces()) {
+		p.SetError(PointerWrap::ERROR_FAILURE);
+		return;
+	}
 	if (p.mode == p.MODE_READ) {
 		// Not serialized, and the clock it was measured against just moved (maybe backwards).
 		g_meBusyUntilUs = 0;
@@ -284,6 +291,7 @@ static bool PublishFrameBuffers(VideocodecCtx &vctx, u32 structAddr, int width, 
 	}
 
 	if (vctx.frameBuffers && (width != vctx.frameBufferWidth || height != vctx.frameBufferHeight)) {
+		DiscardTiledVideoMemory(vctx.frameBuffers, vctx.frameBuffersSize);
 		g_meAlloc.Free(vctx.frameBuffers);
 		vctx.frameBuffers = 0;
 	}
@@ -582,7 +590,7 @@ static int sceVideocodecDecode(u32 ctxAddr, int type) {
 		}
 	}
 	if (au && auBytes > 0) {
-		gotFrame = vctx.decoder->Decode(au, auBytes);
+		gotFrame = vctx.decoder->Decode(au, auBytes, type == 0);
 	}
 
 	const int width = gotFrame ? vctx.decoder->Width() : 0;
@@ -624,8 +632,12 @@ static int sceVideocodecDecode(u32 ctxAddr, int type) {
 			if (Memory::IsValidRange(yuvStructAddr, 8 * 4)) {
 				u32 buffers[8];
 				if (PublishFrameBuffers(vctx, yuvStructAddr, width, height, buffers)) {
-					WriteTiledYCbCr(buffers, *vctx.decoder, width, height);
-					published = true;
+					if (DeferTiledVideoFrame(*vctx.decoder, buffers, width, height)) {
+						published = true;
+					} else if (vctx.decoder->Materialize()) {
+						WriteTiledYCbCr(buffers, *vctx.decoder, width, height);
+						published = true;
+					}
 				}
 			} else {
 				WARN_LOG(Log::ME, "sceVideocodecDecode: type 0 without a usable buffer list");

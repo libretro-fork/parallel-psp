@@ -21,6 +21,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/MemBlockInfo.h"
 #include "Core/MemMap.h"
+#include "Core/HW/VideoMemory.h"
 #include "Common/LogOnce.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/ErrorCodes.h"
@@ -2179,6 +2180,12 @@ void GPUCommon::NotifyVideoCopy(u32 dest, u32 src, int size) {
 }
 
 bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags) {
+	if (size > 0 && (HasVideoMemory(src, size) || HasVideoMemory(dest, size))) {
+		ResolveVideoMemory(src, size);
+		ResolveVideoMemory(dest, size);
+		InvalidateCache(dest, size, GPU_INVALIDATE_HINT);
+		return false;
+	}
 	if (size == 0) {
 		_dbg_assert_msg_(false, "Zero-sized PerformMemoryCopy: %08x -> %08x, size %d (flag: %d)", src, dest, size, (int)flags);
 		return false;
@@ -2270,6 +2277,19 @@ bool GPUCommon::PerformWriteColorFromMemory(u32 dest, int size) {
 		return PerformMemoryCopy(dest, dest, size, GPUCopyFlag::FORCE_SRC_MATCH_MEM | GPUCopyFlag::DEBUG_NOTIFIED);
 	}
 	return false;
+}
+
+bool GPUCommon::WriteVideoTexture(u32 address, int stride, int width, int height, Draw::Texture *texture) {
+	if (!framebufferManager_ || !framebufferManager_->WriteVideoTexture(address, stride, width, height, texture))
+		return false;
+	static bool reported = false;
+	if (!reported) {
+		INFO_LOG(Log::ME, "GPU-backed video buffer active (%dx%d, stride %d)", width, height, stride);
+		reported = true;
+	}
+	NoteVideoRange(address, (u32)stride * height * 4);
+	InvalidateCache(address, stride * height * 4, GPU_INVALIDATE_HINT);
+	return true;
 }
 
 void GPUCommon::PerformWriteFormattedFromMemory(u32 addr, int size, int frameWidth, GEBufferFormat format) {

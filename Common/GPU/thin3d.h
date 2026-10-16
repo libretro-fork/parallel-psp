@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <formats/video_hw_frame.h>
+
 #include <retro_atomic.h>
 #include <cstdint>
 #include <cstddef>
@@ -840,6 +842,15 @@ public:
 	// * OpenGL: GLRTexture
 	// * D3D9: LPDIRECT3DTEXTURE9
 	virtual void BindNativeTexture(int sampler, void *nativeTexture) = 0;
+	// A successful import consumes the lease; failure leaves it with the caller.
+	virtual bool BeginVideoMemoryAccess() { return false; }
+	virtual void EndVideoMemoryAccess(bool temporaryFrame) {}
+	virtual bool SupportsVideoImport() const { return false; }
+	virtual Texture *ImportVideoFrame(const video_hw_frame_t &frame) { return nullptr; }
+	virtual bool ReadVideoTexture(Texture *texture, uint8_t *pixels, int stride) { return false; }
+	// Packed, lossless original Y/Cb/Cr bytes, one RGBA texel per luma sample.
+	virtual bool ReadVideoPlanes(Texture *texture, uint8_t *pixels, int stride) { return false; }
+	virtual bool DeferVideoDecoderClose(void (*close)(void *), void *decoder) { return false; }
 
 	// Only supports a single dynamic uniform buffer, for maximum compatibility with the old APIs and ease of emulation.
 	// More modern methods will be added later.

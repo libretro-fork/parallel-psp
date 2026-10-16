@@ -35,6 +35,7 @@
 #include "Core/HLE/sceMpeg.h"
 #include "Core/HLE/sceMpegbase.h"
 #include "Core/HLE/MpegCscRow.h"
+#include "Core/HW/TiledVideoSurface.h"
 #include "Core/HLE/scePower.h"
 #include "Core/HLE/sceVideocodec.h"
 #include "Core/MemMapHelpers.h"
@@ -483,6 +484,16 @@ static int MpegBaseCscRange(u32 bufferRGB, u32 cscAddr, int bufferWidth,
 		return hleLogError(Log::Mpeg, -1, "range outside the frame");
 	}
 
+	if (g_mpegBasePixelMode == GE_CMODE_32BIT_ABGR8888 && rangeX == 0 && rangeY == 0 && rangeWidth == width && rangeHeight == height) {
+		if (auto *surface = FindTiledVideoSurface(buffers, width, height)) {
+			if (gpu->WriteVideoTexture(bufferRGB, bufferWidth, width, height, surface)) {
+				NotifyMemInfo(MemBlockFlags::WRITE, bufferRGB, (u32)bufferWidth * height * 4, "MpegBaseCsc GPU");
+				const int cscUs = std::max(1, PowerScaleFromDefaultClock((int)(2400LL * width * height / (480 * 272))));
+				return hleDelayResult(hleLogDebug(Log::Mpeg, 0, "GPU %dx%d -> %08x", width, height, bufferRGB), "mpegbase csc", cscUs);
+			}
+		}
+	}
+
 	const u8 *luma, *cb, *cr;
 	if (!ReadTiledYCbCr(buffers, width, height, &luma, &cb, &cr)) {
 		return hleLogError(Log::Mpeg, -1, "YCbCr buffers not readable");
@@ -582,6 +593,14 @@ static int sceMpegBaseYCrCbCopy(u32 dstAddr, u32 srcAddr, int flags) {
 	const int height = dst->height << 4;
 	if (width <= 0 || height <= 0 || width > 1024 || height > 1024) {
 		return hleLogError(Log::Mpeg, -1, "unreasonable frame size %dx%d", width, height);
+	}
+	u32 sourceBuffers[8], destinationBuffers[8];
+	for (int i = 0; i < 8; ++i) { sourceBuffers[i] = src->buffer[i]; destinationBuffers[i] = dst->buffer[i]; }
+	if ((flags & 3) == 3) {
+		if (auto *surface = FindTiledVideoSurface(sourceBuffers, width, height)) {
+			if (RememberTiledVideoSurface(surface, destinationBuffers, width, height, false))
+				return hleLogDebug(Log::Mpeg, 0, "GPU YCbCr copy %dx%d", width, height);
+		}
 	}
 	int sizes[8];
 	VideocodecFrameBufferLayout(width, height, sizes, nullptr);

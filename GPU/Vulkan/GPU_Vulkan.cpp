@@ -27,6 +27,9 @@
 #include "Common/Data/Text/StringWriter.h"
 
 #include "Core/Config.h"
+#include "Core/HW/VideoMemory.h"
+#include "Core/HW/TiledVideoSurface.h"
+#include "Core/HW/MediaEngine.h"
 #include "Common/LogOnce.h"
 #include "Core/System.h"
 #include "Core/ELF/ParamSFO.h"
@@ -321,6 +324,9 @@ void GPU_Vulkan::CheckRenderResized(const DisplayLayoutConfig &config) {
 }
 
 void GPU_Vulkan::DeviceLost() {
+	ResolveAllVideoMemory();
+	ClearTiledVideoSurfaces();
+	MediaEngine::ReleaseGpuFrames();
 	// draw_ is normally actually still valid here in Vulkan. But we null it out in GPUCommonHW::DeviceLost so we don't try to use it again.
 	// So, we have to save it here to be able to call ReleaseCompileQueue().
 	Draw::DrawContext *draw = draw_;

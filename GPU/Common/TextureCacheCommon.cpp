@@ -33,6 +33,7 @@
 #include "Common/GPU/thin3d.h"
 #include "Core/HDRemaster.h"
 #include "Core/Config.h"
+#include "Core/HW/VideoMemory.h"
 #include "Core/Debugger/MemBlockInfo.h"
 #include "Core/System.h"
 #include "Core/HW/Display.h"
@@ -591,6 +592,13 @@ TextureApplyResult TextureCacheCommon::ApplyTexture(bool doBind) {
 	const bool swizzled = gstate.isTextureSwizzled();
 
 	TexCache::iterator entryIter = cache_.find(cachekey);
+	// A GPU video write supersedes any cached RAM texture. Prefer the framebuffer
+	// match below without hashing or dereferencing protected guest memory.
+	if (entryIter != cache_.end() && HasVideoMemory(texaddr, 1)) {
+		ReleaseTexture(entryIter->second.get(), true);
+		cache_.erase(entryIter);
+		entryIter = cache_.end();
+	}
 
 	// Note: It's necessary to reset needshadertexclamp, for otherwise DIRTY_TEXCLAMP won't get set later.
 	// Should probably revisit how this works..

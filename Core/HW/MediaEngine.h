@@ -31,6 +31,7 @@
 #include "Core/HW/MpegDemux.h"
 #include "Core/HW/SimpleAudioDec.h"
 
+namespace Draw { class Texture; }
 class PointerWrap;
 class AudioDecoder;
 class AvcDecoder;
@@ -46,6 +47,8 @@ public:
 	MediaEngine();
 	~MediaEngine();
 
+	// Resolve device-owned frames before a graphics context is destroyed.
+	static void ReleaseGpuFrames();
 	void closeMedia();
 	bool loadStream(const u8 *buffer, int readSize, int RingbufferSize);
 	bool reloadStream();
@@ -64,6 +67,7 @@ public:
 	bool setAudioStream(int streamNum);
 
 	u8 *getFrameImage();
+	bool WasGpuVideoWrite() const { return m_gpuVideoWrite; }
 	int getRemainSize();
 	int getAudioRemainSize();
 
@@ -102,6 +106,7 @@ private:
 	// Whether the whole program stream the header promised has gone to the demuxer.
 	bool streamFed() const;
 	void clearUnits();
+	bool ensureFramePixels();
 	void dropOldestPts();
 
 public:  // TODO: Very little of this below should be public.
@@ -124,6 +129,9 @@ private:
 	bool m_contextOpen = false;
 	struct rpsmf *m_psmf = nullptr;
 	AvcDecoder *m_avc = nullptr;
+	Draw::Texture *m_gpuVideoFrame = nullptr;
+	bool m_cpuFrameReady = true;
+	bool m_gpuVideoWrite = false;
 	std::vector<u8> m_au;
 	std::vector<u8> m_decodeUnit;  // Keep input stable across hardware backpressure.
 	bool m_retryDecode = false;

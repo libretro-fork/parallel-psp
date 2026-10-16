@@ -422,6 +422,11 @@ add_library(Core STATIC
 	HW/Display.h
 	HW/GpioMMIO.cpp
 	HW/GpioMMIO.h
+	HW/VideoMemoryHost.cpp
+	HW/TiledVideoSurface.cpp
+	HW/TiledVideoSurface.h
+	HW/VideoMemory.cpp
+	HW/VideoMemory.h
 	HW/AvcDecoder.cpp
 	HW/AvcDecoder.h
 	HW/MediaEngine.cpp

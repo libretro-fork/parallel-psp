@@ -122,6 +122,7 @@ enum class VKRStepType : uint8_t {
 	BLIT,
 	READBACK,
 	READBACK_IMAGE,
+	GPU_CALLBACK,
 };
 
 struct TransitionRequest {
@@ -137,8 +138,11 @@ struct TransitionRequest {
 class VKRRenderPass;
 
 struct VKRStep {
-	VKRStep(VKRStepType _type) : stepType(_type) {}
-	~VKRStep() {}
+	VKRStep(VKRStepType _type) : stepType(_type) { if (_type == VKRStepType::GPU_CALLBACK) callback = {}; }
+	~VKRStep() {
+		if (stepType == VKRStepType::GPU_CALLBACK && callback.dispose)
+			callback.dispose(callback.context);
+	}
 
 	VKRStepType stepType;
 	FastVec<VkRenderData> commands;
@@ -146,6 +150,11 @@ struct VKRStep {
 	TinySet<VKRFramebuffer *, 8> dependencies;
 	const char *tag;
 	union {
+		struct {
+			void (*record)(void *, VkCommandBuffer, FrameData &);
+			void (*dispose)(void *);
+			void *context;
+		} callback;
 		struct {
 			VKRFramebuffer *framebuffer;
 			VKRRenderPassLoadAction colorLoad;
@@ -339,7 +348,7 @@ inline size_t CoalescePendingReadbacks(std::vector<VKRStep *> &steps, CachedRead
 	size_t removed = 0;
 	for (size_t i = steps.size(); i > 0;) {
 		VKRStep *step = steps[--i];
-		if (step->stepType == VKRStepType::READBACK_IMAGE ||
+		if (step->stepType == VKRStepType::GPU_CALLBACK || step->stepType == VKRStepType::READBACK_IMAGE ||
 			(step->stepType == VKRStepType::READBACK && !step->readback.delayed)) {
 			break;  // Never cross a synchronous consumer.
 		}

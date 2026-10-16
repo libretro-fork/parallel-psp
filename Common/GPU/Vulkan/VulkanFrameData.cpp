@@ -154,6 +154,16 @@ VkCommandBuffer FrameData::GetInitCmd(VulkanContext *vulkan) {
 	return initCmd;
 }
 
+void FrameData::AddVideoLease(const video_hw_frame_t &frame) {
+	VideoSemaphore wait{}, signal{};
+	memcpy(&wait.semaphore, &frame.wait, sizeof(VkSemaphore));
+	memcpy(&signal.semaphore, &frame.done, sizeof(VkSemaphore));
+	wait.value = frame.wait_value;
+	signal.value = frame.done_value;
+	videoWaits.push_back(wait);
+	videoSignals.push_back(signal);
+}
+
 void FrameData::Submit(VulkanContext *vulkan, FrameSubmitType type, FrameDataShared &sharedData) {
 	VkCommandBuffer cmdBufs[3];
 	int numCmdBufs = 0;
@@ -221,6 +231,56 @@ void FrameData::Submit(VulkanContext *vulkan, FrameSubmitType type, FrameDataSha
 	}
 	vulkan->PrepareSubmit(submit_info);
 
+	std::vector<VkSemaphore> waits, signals;
+	std::vector<VkPipelineStageFlags> stages;
+	std::vector<uint64_t> waitValues, signalValues;
+	VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+	if (!videoWaits.empty()) {
+		for (uint32_t i = 0; i < submit_info.waitSemaphoreCount; ++i) {
+			waits.push_back(submit_info.pWaitSemaphores[i]);
+			stages.push_back(submit_info.pWaitDstStageMask[i]);
+			waitValues.push_back(0);
+		}
+		for (uint32_t i = 0; i < submit_info.signalSemaphoreCount; ++i) {
+			signals.push_back(submit_info.pSignalSemaphores[i]);
+			signalValues.push_back(0);
+		}
+		for (const auto &wait : videoWaits) {
+			size_t i = 0;
+			for (; i < waits.size() && waits[i] != wait.semaphore; ++i) {}
+			if (i == waits.size()) {
+				waits.push_back(wait.semaphore);
+				stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+				waitValues.push_back(wait.value);
+			} else {
+				waitValues[i] = std::max(waitValues[i], wait.value);
+				stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+			}
+		}
+		for (const auto &signal : videoSignals) {
+			size_t i = 0;
+			for (; i < signals.size() && signals[i] != signal.semaphore; ++i) {}
+			if (i == signals.size()) {
+				signals.push_back(signal.semaphore);
+				signalValues.push_back(signal.value);
+			} else {
+				signalValues[i] = std::max(signalValues[i], signal.value);
+			}
+		}
+		timeline.pNext = submit_info.pNext;
+		timeline.waitSemaphoreValueCount = (uint32_t)waitValues.size();
+		timeline.pWaitSemaphoreValues = waitValues.data();
+		timeline.signalSemaphoreValueCount = (uint32_t)signalValues.size();
+		timeline.pSignalSemaphoreValues = signalValues.data();
+		timeline.pNext = submit_info.pNext;
+		submit_info.pNext = &timeline;
+		submit_info.waitSemaphoreCount = (uint32_t)waits.size();
+		submit_info.pWaitSemaphores = waits.data();
+		submit_info.pWaitDstStageMask = stages.data();
+		submit_info.signalSemaphoreCount = (uint32_t)signals.size();
+		submit_info.pSignalSemaphores = signals.data();
+	}
+
 	VkResult res;
 	if (fenceToTrigger == fence) {
 		VLOG("Doing queue submit, fencing frame %d", this->index);
@@ -239,6 +299,8 @@ void FrameData::Submit(VulkanContext *vulkan, FrameSubmitType type, FrameDataSha
 		vulkan->UnlockQueue();
 	}
 
+	videoWaits.clear();
+	videoSignals.clear();
 	if (res == VK_ERROR_DEVICE_LOST) {
 		_assert_msg_(false, "Lost the Vulkan device in vkQueueSubmit!\n\nIf this happens again, switch Graphics Backend away from Vulkan");
 	} else {

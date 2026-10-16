@@ -16,6 +16,9 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "ppsspp_config.h"
+#include "Core/HW/VideoMemory.h"
+#include "Core/HW/TiledVideoSurface.h"
+#include "Core/HW/MediaEngine.h"
 
 #include "Common/TimeUtil.h"
 #include "Common/GPU/GraphicsContext.h"
@@ -105,6 +108,9 @@ bool GPU_Init(GPUCore gpuCore, GraphicsContext *ctx, Draw::DrawContext *draw) {
 #endif
 
 void GPU_Shutdown() {
+	ResolveAllVideoMemory();
+	ClearTiledVideoSurfaces();
+	MediaEngine::ReleaseGpuFrames();
 	GPUStepping::Reset();
 	delete gpu;
 	gpu = nullptr;

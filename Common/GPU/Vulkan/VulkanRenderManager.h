@@ -250,7 +250,10 @@ public:
 	~VulkanRenderManager();
 
 	// Makes sure that the GPU has caught up enough that we can start writing buffers of this frame again.
+	bool InsideFrame() const { return insideFrame_; }
 	void BeginFrame(bool enableProfiling);
+	void QueueGpuCallback(void (*record)(void *, VkCommandBuffer, ::FrameData &),
+		void (*dispose)(void *), void *context);
 	// These can run on a different thread!
 	void Finish();
 	void Present();

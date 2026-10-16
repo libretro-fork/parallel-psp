@@ -70,7 +70,10 @@ class ShaderWriter;
 // and they know which color buffer they were used with last.
 // Two VirtualFramebuffer can occupy the same address range as long as they have different fb_format.
 // In that case, the one with the highest colorBindSeq number is the valid one.
+class FramebufferManagerCommon;
 struct VirtualFramebuffer {
+	FramebufferManagerCommon *videoOwner = nullptr;
+	bool videoCpuDirty = false;
 	u32 fb_address;
 	u32 z_address;  // If 0, it's a "RAM" framebuffer.
 	u16 fb_stride;
@@ -344,6 +347,9 @@ public:
 	bool NotifyFramebufferCopy(u32 src, u32 dest, int size, GPUCopyFlag flags, u32 skipDrawReason);
 	void PerformWriteFormattedFromMemory(u32 addr, int size, int width, GEBufferFormat fmt);
 	void UpdateFromMemory(u32 addr, int size);
+	bool WriteVideoTexture(u32 address, int stride, int width, int height, Draw::Texture *texture);
+	void EnsureVideoCpuCurrent(VirtualFramebuffer *vfb);
+	static bool MaterializeVideo(void *owner);
 	void ApplyClearToMemory(int x1, int y1, int x2, int y2, u32 clearColor);
 	bool PerformWriteStencilFromMemory(u32 addr, int size, WriteStencil flags);
 
@@ -553,7 +559,7 @@ protected:
 	VirtualFramebuffer *FindDownloadTempBuffer(VirtualFramebuffer *vfb, RasterChannel channel);
 	virtual void UpdateDownloadTempBuffer(VirtualFramebuffer *nvfb) {}
 
-	VirtualFramebuffer *CreateRAMFramebuffer(uint32_t fbAddress, int width, int height, int stride, GEBufferFormat format);
+	VirtualFramebuffer *CreateRAMFramebuffer(uint32_t fbAddress, int width, int height, int stride, GEBufferFormat format, bool visibleWidthOnly = false);
 
 	void UpdateFramebufUsage(VirtualFramebuffer *vfb) const;
 

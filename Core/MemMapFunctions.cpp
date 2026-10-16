@@ -61,6 +61,7 @@ u8 *GetPointerWriteRangeOrException(const u32 address, const u32 size) {
 			Core_MemoryException(address, size, currentMIPS->pc, MemoryExceptionType::WRITE_BLOCK);
 			return nullptr;
 		} else {
+			PrepareVideoMemoryAccess(address, size);
 			return ptr;
 		}
 	} else {
@@ -77,6 +78,7 @@ const u8 *GetPointerRangeOrException(const u32 address, const u32 size) {
 			Core_MemoryException(address, size, currentMIPS->pc, MemoryExceptionType::READ_BLOCK);
 			return nullptr;
 		} else {
+			PrepareVideoMemoryAccess(address, size);
 			return ptr;
 		}
 	} else {
@@ -91,6 +93,7 @@ inline void ReadMemoryOrException(T &var, const u32 address) {
 		(address & 0xBF800000) == 0x04000000 || // VRAM
 		(address & 0x3FFFC000) == 0x00010000 || // Scratchpad
 		((address & 0x3FFFFFFF) >= 0x08000000 && (address & 0x3FFFFFFF) < 0x08000000 + g_MemorySize)) { // More RAM (remasters, etc.)
+		PrepareVideoMemoryAccess(address, sizeof(T));
 		var = *((const T*)GetPointerUnchecked(address));
 	} else {
 		Core_MemoryException(address, sizeof(T), currentMIPS->pc, MemoryExceptionType::READ_WORD);
@@ -104,6 +107,7 @@ inline void WriteMemoryOrException(u32 address, const T data) {
 		(address & 0xBF800000) == 0x04000000 || // VRAM
 		(address & 0x3FFFC000) == 0x00010000 || // Scratchpad
 		((address & 0x3FFFFFFF) >= 0x08000000 && (address & 0x3FFFFFFF) < 0x08000000 + g_MemorySize)) { // More RAM (remasters, etc.)
+		PrepareVideoMemoryAccess(address, sizeof(T));
 		*(T*)GetPointerUnchecked(address) = data;
 	} else {
 		Core_MemoryException(address, sizeof(T), currentMIPS->pc, MemoryExceptionType::WRITE_WORD);

@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <retro_atomic.h>
+#include <formats/video_hw_frame.h>
 
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/Data/Collections/Hashmaps.h"
@@ -92,6 +93,9 @@ enum class FrameSubmitType {
 
 // Per-frame data, round-robin so we can overlap submission with execution of the previous frame.
 struct FrameData {
+	struct VideoSemaphore { VkSemaphore semaphore; uint64_t value; };
+	std::vector<VideoSemaphore> videoWaits, videoSignals;
+	void AddVideoLease(const video_hw_frame_t &frame);
 	bool skipSwap = false;
 
 	// With the render thread: set once it has submitted this frame (its fence is then in flight),

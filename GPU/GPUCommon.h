@@ -33,6 +33,7 @@ struct VirtualFramebuffer;
 
 namespace Draw {
 class DrawContext;
+class Texture;
 }
 
 class StringWriter;
@@ -166,6 +167,7 @@ public:
 	// Tells the texture cache that a block copy moved pixels, so it can carry "this is video" from
 	// the source to the destination. Cheap and safe to call for any copy.
 	void NotifyVideoCopy(u32 dest, u32 src, int size);
+	bool WriteVideoTexture(u32 address, int stride, int width, int height, Draw::Texture *texture);
 
 	virtual void ExecuteOp(u32 op, u32 diff) = 0;
 

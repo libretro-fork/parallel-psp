@@ -500,7 +500,10 @@ test/lrtest: test/lrtest.c
 test/lrgltest: test/lrgltest.c
 	$(CC) -O2 -I$(LIBRETROCOMMONDIR)/include -o $@ $< -ldl -lEGL
 
-test-tools: $(TARGET) test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest
+test/vk_negotiate: test/vk_negotiate.c
+	$(CC) -O2 -I$(LIBRETROCOMMONDIR)/include -I../ext -o $@ $< -ldl
+
+test-tools: $(TARGET) test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/vk_negotiate
 
 # Native Windows make cannot spawn one command containing every object and
 # dependency sidecar. Static pattern targets keep each deletion command short.
@@ -510,7 +513,7 @@ $(CLEAN_OBJECT_TARGETS): %.clean:
 	@rm -f $* $*.d $*.deps.json
 
 clean: $(CLEAN_OBJECT_TARGETS)
-	rm -f $(TARGET) test/*.o test/*.o.d test/*.o.deps.json test/codectest test/blocktest test/lrtest test/lrgltest
+	rm -f $(TARGET) test/*.o test/*.o.d test/*.o.deps.json test/codectest test/blocktest test/lrtest test/lrgltest test/vk_negotiate
 
 .PHONY: clean test-tools
 

@@ -155,7 +155,21 @@ bool LibretroVulkanContext::InitAPI(void *wnd, std::string *deviceName, std::str
 		nullptr,
 		create_device2,
 	};
-	Libretro::environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE, (void *)&iface);
+	// A frontend that predates v2 rejects any version but 1, and would then make a device of its own.
+	static const struct retro_hw_render_context_negotiation_interface_vulkan iface_v1 = {
+		RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN,
+		1,
+		GetApplicationInfo,
+		create_device,
+		nullptr,
+	};
+	retro_hw_render_context_negotiation_interface support;
+	support.interface_type = RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN;
+	support.interface_version = 0;
+	if (!Libretro::environ_cb(RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT, &support))
+		support.interface_version = 0;
+	Libretro::environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE,
+		(void *)(support.interface_version >= 2 ? &iface : &iface_v1));
 
 	g_Config.iGPUBackend = (int)GPUBackend::VULKAN;
 	return true;

@@ -36,4 +36,18 @@ LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" "$root/li
 	|| { echo "FAIL: GL backend run"; exit 1; }
 rm -rf "$save"
 
+# The Vulkan device, negotiated as RetroArch does (v2: made through the
+# frontend's vkCreateDevice wrapper, which adds what the frontend needs, e.g.
+# for Driver Pacing) and as a frontend without v2 does (v1), under the
+# validation layer. Mesa's lavapipe is enough.
+for offer in 2 1; do
+	expect=0
+	[ "$offer" -ge 2 ] && expect=1
+	save=$(mktemp -d)
+	VKN_OFFER=$offer VKN_EXPECT_WRAPPER=$expect VKN_DIR=$save timeout -k 5 300 "$here/vk_negotiate" \
+		"$root/libretro/ppsspp_libretro.so" "$data/test.iso" ppsspp_backend=vulkan \
+		|| { echo "FAIL: Vulkan negotiation v$offer"; exit 1; }
+	rm -rf "$save"
+done
+
 echo "All image and codec checks passed."

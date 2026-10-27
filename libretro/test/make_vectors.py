@@ -91,26 +91,34 @@ open(os.path.join(root, 'DATA', 'zero.bin'), 'wb').write(bytes(4 << 20))
 iso = os.path.join(out, 'test.iso')
 subprocess.check_call(['genisoimage', '-quiet', '-iso-level', '4', '-sysid', 'PSP GAME', '-V', 'TEST', '-o', iso, root])
 
-def cso(src, dst, block):
+# align puts every frame on a 1 << align boundary, padding the one before.
+def cso(src, dst, block, align=0):
     data = open(src, 'rb').read()
     n = (len(data) + block - 1) // block
-    hdr = struct.pack('<4sIQIBB2s', b'CISO', 0x18, len(data), block, 1, 0, b'\0\0')
+    hdr = struct.pack('<4sIQIBB2s', b'CISO', 0x18, len(data), block, 1, align, b'\0\0')
     body = bytearray(); index = []
     pos = len(hdr) + 4 * (n + 1)
+    def place():
+        while (pos + len(body)) % (1 << align):
+            body.append(0)
+        return (pos + len(body)) >> align
     for i in range(n):
         chunk = data[i * block:(i + 1) * block].ljust(block, b'\0')
         c = zlib.compressobj(9, zlib.DEFLATED, -15)
         comp = c.compress(chunk) + c.flush()
+        at = place()
         if len(comp) >= block:
-            index.append((pos + len(body)) | 0x80000000); body += chunk
+            index.append(at | 0x80000000); body += chunk
         else:
-            index.append(pos + len(body)); body += comp
-    index.append(pos + len(body))
+            index.append(at); body += comp
+    index.append(place())
     with open(dst, 'wb') as f:
         f.write(hdr); f.write(struct.pack('<%dI' % len(index), *index)); f.write(body)
 
 cso(iso, os.path.join(out, 'test.cso'), 2048)
 cso(iso, os.path.join(out, 'test16k.cso'), 16384)
+cso(iso, os.path.join(out, 'test_align.cso'), 2048, align=4)
+cso(iso, os.path.join(out, 'test_pad.cso'), 2048, align=12)
 for name, extra in [('test.chd', []), ('test_zstd.chd', ['-c', 'zstd']), ('test_zlib.chd', ['-c', 'zlib']),
                     ('test_lzma.chd', ['-c', 'lzma']), ('test_huff.chd', ['-c', 'huff']),
                     ('test_big.chd', ['-hs', '65536', '-c', 'zstd,lzma'])]:

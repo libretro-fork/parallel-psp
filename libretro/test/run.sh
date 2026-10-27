@@ -9,7 +9,7 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 
 "$here/atrac3ptest"
 "$here/codectest" "$data"
-for img in test.iso test.cso test16k.cso test.chd test_zstd.chd test_zlib.chd test_lzma.chd test_huff.chd test_big.chd stored.zip deflated.zip; do
+for img in test.iso test.cso test16k.cso test_align.cso test_pad.cso test.chd test_zstd.chd test_zlib.chd test_lzma.chd test_huff.chd test_big.chd stored.zip deflated.zip; do
 	"$here/blocktest" "$data/test.iso" "$data/$img"
 done
 

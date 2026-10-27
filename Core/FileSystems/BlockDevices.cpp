@@ -769,6 +769,16 @@ bool CISOFileBlockDevice::ReadBlock(int blockNumber, u8 *outPtr, bool uncached)
 	return true;
 }
 
+/* A frame kept as it is, its bytes in the file exactly a frame long: one
+ * that a read can take from the file straight to where it goes. */
+bool CISOFileBlockDevice::IsPlainFrame(u32 frame) const {
+	const u32 idx  = index[frame];
+	const u64 pos  = (u64)(idx & 0x7FFFFFFF) << indexShift;
+	const u64 end  = (u64)(index[frame + 1] & 0x7FFFFFFF) << indexShift;
+	const bool flagged = ver_ >= 2 ? end - pos >= frameSize : (idx & 0x80000000) != 0;
+	return flagged && end > pos && end - pos == frameSize;
+}
+
 bool CISOFileBlockDevice::ReadBlocks(u32 minBlock, int count, u8 *outPtr) {
 	if (count == 1) {
 		return ReadBlock(minBlock, outPtr);
@@ -809,6 +819,27 @@ bool CISOFileBlockDevice::ReadBlocks(u32 minBlock, int count, u8 *outPtr) {
 		const u32 frameReadSize = (u32)std::min<size_t>((size_t)(frameReadEnd - frameReadPos), readBufferSize);
 		const u32 frameBlockOffset = block & ((1 << blockShift) - 1);
 		const u32 frameBlocks = std::min(lastBlock - block + 1, blocksPerFrame - frameBlockOffset);
+
+		/* The rest of the request in plain frames, each exactly a frame
+		 * long, lies in the file as it is to go out: read straight to the
+		 * destination, the one read the buffer would have taken. (A run that
+		 * stops short of the end goes through the buffer, which reads what
+		 * follows it in the same read.) */
+		u32 runFrames = 0;
+		if (frameReadEnd > readBufferEnd)
+			while (frame + runFrames <= lastFrameNumber && IsPlainFrame(frame + runFrames))
+				runFrames++;
+		if (runFrames && frame + runFrames - 1 == lastFrameNumber) {
+			const u32 runBlocks = lastBlock - block + 1;
+			const size_t want = (size_t)runBlocks * GetBlockSize();
+			size_t got;
+			got = fileLoader_->ReadAt(frameReadPos + (u64)frameBlockOffset * GetBlockSize(), 1, want, outPtr);
+			if (got < want) {
+				memset(outPtr + got, 0, want - got);
+				NotifyReadError();
+			}
+			break;
+		}
 
 		if (frameReadEnd > readBufferEnd) {
 			const s64 maxNeeded = totalReadEnd - frameReadPos;

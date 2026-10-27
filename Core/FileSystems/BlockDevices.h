@@ -79,6 +79,8 @@ public:
 	bool IsDisc() const override { return true; }
 
 private:
+	bool IsPlainFrame(u32 frame) const;
+
 	u32 *index = nullptr;
 	u8 *readBuffer = nullptr;
 	size_t readBufferSize = 0;

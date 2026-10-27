@@ -207,9 +207,27 @@ bool AvcDecoder::ExportGpuFrame(video_hw_frame *frame) {
 		if (exported.abandon) exported.abandon(exported.owner, exported.done, exported.done_value);
 		return false;
 	}
-	static_assert(sizeof(exported) == sizeof(*frame), "GPU frame ABI");
-	static_assert(offsetof(retro_video_decode_gpu_frame, api) == offsetof(video_hw_frame_t, api), "GPU frame layout");
-	memcpy(frame, &exported, sizeof(*frame));
+	/* The frontend's lease field by field: the frame carries more (its
+	 * colour metadata, absent here) than the interface hands over. */
+	memset(frame, 0, sizeof(*frame));
+	frame->image          = exported.image;
+	frame->plane_views[0] = exported.plane_views[0];
+	frame->plane_views[1] = exported.plane_views[1];
+	frame->wait           = exported.wait;
+	frame->wait_value     = exported.wait_value;
+	frame->done           = exported.done;
+	frame->done_value     = exported.done_value;
+	frame->abandon        = exported.abandon;
+	frame->owner          = exported.owner;
+	frame->width          = exported.width;
+	frame->height         = exported.height;
+	frame->layout         = exported.layout;
+	frame->yuv            = exported.yuv;
+	frame->pixfmt         = exported.pixfmt;
+	frame->array_slice    = exported.array_slice;
+	frame->crop_x         = exported.crop_x;
+	frame->crop_y         = exported.crop_y;
+	frame->api            = exported.api;
 	gpuExported_ = true;
 	return true;
 }

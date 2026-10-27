@@ -39,17 +39,23 @@
  * A view selects @array_slice; @crop_x/@crop_y locate the visible window.
  *
  * D3D11: NT handles of a shared DXGI_FORMAT_NV12 or P010 texture and of two
- * shared ID3D11Fences, used as above; @layout names the decoder's set
+ * shared ID3D11Fences, used as above. YUV8_FP16/YUV10_FP16 instead name
+ * RGBA16F textures with integer Y,Cb,Cr samples, without colour conversion.
+ * @layout names the decoder's set
  * of handles, so that a reader keeping what it opened of them opens
  * them again when it changes. D3D12 readers may receive a decoder array:
  * @array_slice selects its element and @crop_x/@crop_y its visible origin.
- * These fields are zero for standalone output textures. */
+ * These fields are zero for standalone output textures.
+ *
+ * Metal: @image is an opaque retained lease from metal_frame_create,
+ * identified by its abandon callback, never a raw MTLTexture pointer. */
 
 #include <stdint.h>
 #include <stddef.h>
 
 #include <retro_common_api.h>
 #include <retro_inline.h>
+#include <formats/video_color.h>
 
 RETRO_BEGIN_DECLS
 
@@ -57,7 +63,8 @@ enum video_hw_api
 {
    VIDEO_HW_API_UNKNOWN = 0,
    VIDEO_HW_API_VULKAN = 1,
-   VIDEO_HW_API_D3D11 = 2
+   VIDEO_HW_API_D3D11 = 2,
+   VIDEO_HW_API_METAL = 3
 };
 
 typedef struct video_hw_frame
@@ -77,6 +84,7 @@ typedef struct video_hw_frame
    unsigned pixfmt;          /* image_pixfmt; zero means legacy NV12 */
    unsigned array_slice;    /* D3D12: shared decoder array element */
    unsigned crop_x, crop_y; /* visible origin within that element */
+   video_color_metadata_t color;
    unsigned api;             /* video_hw_api; zero for older producers */
 } video_hw_frame_t;
 

@@ -337,7 +337,7 @@ void Atrac2::DumpBufferToFile() {
 }
 
 void Atrac2::DoState(PointerWrap &p) {
-	auto s = p.Section("Atrac2", 1, 4);
+	auto s = p.Section("Atrac2", 1, 5);
 	if (!s)
 		return;
 
@@ -371,6 +371,8 @@ void Atrac2::DoState(PointerWrap &p) {
 	if (p.mode == p.MODE_READ && info.state != ATRAC_STATUS_NO_DATA) {
 		CreateDecoder(info.codec, info.sampleSize, info.numChan, jointStereo_);
 	}
+	if (s >= 5)
+		DoAudioDecoderState(p, decoder_);
 }
 
 bool Atrac2::HasSecondBuffer() const {

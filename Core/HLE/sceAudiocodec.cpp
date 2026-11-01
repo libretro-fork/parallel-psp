@@ -804,7 +804,7 @@ void Register_sceAudiocodec() {
 }
 
 void __sceAudiocodecDoState(PointerWrap &p){
-	auto s = p.Section("AudioList", 0, 3);
+	auto s = p.Section("AudioList", 0, 4);
 	if (!s) {
 		if (p.mode == PointerWrap::MODE_READ) {
 			clearDecoders();
@@ -880,5 +880,25 @@ void __sceAudiocodecDoState(PointerWrap &p){
 		Do(p, g_primingFrames);
 	} else if (p.mode == PointerWrap::MODE_READ) {
 		g_primingFrames.clear();
+	}
+
+	// Each decoder's own state, by context, as contexts the load refused are not there.
+	if (s >= 4) {
+		int states = (int)g_audioDecoderContexts.size();
+		Do(p, states);
+		if (p.mode == PointerWrap::MODE_READ) {
+			for (int i = 0; i < states && p.error == PointerWrap::ERROR_NONE; i++) {
+				u32 ctxPtr = 0;
+				Do(p, ctxPtr);
+				auto it = g_audioDecoderContexts.find(ctxPtr);
+				DoAudioDecoderState(p, it != g_audioDecoderContexts.end() ? it->second : nullptr);
+			}
+		} else {
+			for (auto &[ctxPtr, decoder] : g_audioDecoderContexts) {
+				u32 ptr = ctxPtr;
+				Do(p, ptr);
+				DoAudioDecoderState(p, decoder);
+			}
+		}
 	}
 }

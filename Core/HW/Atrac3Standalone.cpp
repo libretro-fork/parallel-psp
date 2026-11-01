@@ -132,6 +132,53 @@ public:
 
 	PSPAudioType GetAudioType() const override { return audioType_; }
 
+	// ATRAC3+ opens at its first frame, sized by it, so the state says how it was opened.
+	struct StateHeader {
+		s32 channels;
+		s32 blockAlign;
+		u8 open;
+		u8 failed;
+		u8 pad[2];
+	};
+	size_t StateSize() const override {
+		if (audioType_ == PSP_CODEC_AT3PLUS)
+			return sizeof(StateHeader) + (at3p_ ? ratrac3p_state_size(at3p_) : 0);
+		return at3_ ? ratrac3_state_size(at3_) : 0;
+	}
+	void SaveState(uint8_t *data) const override {
+		if (audioType_ != PSP_CODEC_AT3PLUS) {
+			ratrac3_save_state(at3_, data);
+			return;
+		}
+		StateHeader h{ channels_, blockAlign_, (u8)(at3p_ != nullptr), (u8)codecFailed_ };
+		memcpy(data, &h, sizeof(h));
+		if (at3p_)
+			ratrac3p_save_state(at3p_, data + sizeof(h));
+	}
+	bool LoadState(const uint8_t *data, size_t size) override {
+		if (audioType_ != PSP_CODEC_AT3PLUS)
+			return at3_ && ratrac3_load_state(at3_, data, size);
+		StateHeader h;
+		if (size < sizeof(h))
+			return false;
+		memcpy(&h, data, sizeof(h));
+		if (h.channels < 1 || h.channels > RATRAC3P_MAX_CHANNELS)
+			return false;
+		if (at3p_ && (!h.open || h.channels != channels_ || h.blockAlign != blockAlign_)) {
+			ratrac3p_free(at3p_);
+			at3p_ = nullptr;
+		}
+		channels_ = h.channels;
+		blockAlign_ = h.blockAlign;
+		codecFailed_ = h.failed != 0;
+		if (h.open && !at3p_)
+			at3p_ = ratrac3p_new(channels_, blockAlign_);
+		codecOpen_ = at3p_ != nullptr;
+		if (!h.open)
+			return size == sizeof(h);
+		return at3p_ && ratrac3p_load_state(at3p_, data + sizeof(h), size - sizeof(h));
+	}
+
 private:
 	PSPAudioType audioType_;
 	int channels_ = 0;

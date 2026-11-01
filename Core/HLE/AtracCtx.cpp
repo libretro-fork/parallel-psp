@@ -37,7 +37,7 @@ Atrac::~Atrac() {
 }
 
 void Atrac::DoState(PointerWrap &p) {
-	auto s = p.Section("Atrac", 1, 9);
+	auto s = p.Section("Atrac", 1, 10);
 	if (!s)
 		return;
 
@@ -148,6 +148,8 @@ void Atrac::DoState(PointerWrap &p) {
 		bool oldResetBuffer = false;
 		Do(p, oldResetBuffer);
 	}
+	if (s >= 10)
+		DoAudioDecoderState(p, decoder_);
 }
 
 void Atrac::ResetData() {

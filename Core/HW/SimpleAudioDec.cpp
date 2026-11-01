@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 
 #include "Common/Serialize/SerializeFuncs.h"
@@ -183,6 +184,18 @@ public:
 	}
 	PSPAudioType GetAudioType() const override { return PSP_CODEC_MP3; }
 
+	// Everything but the scratch, which is dead between frames.
+	size_t StateSize() const override { return dec_ ? offsetof(rmp3dec, scratch) : 0; }
+	void SaveState(uint8_t *data) const override {
+		memcpy(data, dec_, offsetof(rmp3dec, scratch));
+	}
+	bool LoadState(const uint8_t *data, size_t size) override {
+		if (!dec_ || size != offsetof(rmp3dec, scratch))
+			return false;
+		memcpy(dec_, data, size);
+		return true;
+	}
+
 private:
 	rmp3dec *dec_ = nullptr;
 	int16_t pcm_[RMP3_MAX_SAMPLES_PER_FRAME];
@@ -243,6 +256,23 @@ AudioDecoder *CreateAudioDecoder(PSPAudioType audioType, int sampleRateHz, int c
 	default:
 		return new AacAudio(sampleRateHz, channels);
 	}
+}
+
+void DoAudioDecoderState(PointerWrap &p, AudioDecoder *decoder) {
+	auto s = p.Section("AudioDecoderState", 1, 1);
+	if (!s)
+		return;
+	u32 size = decoder && p.mode != PointerWrap::MODE_READ ? (u32)decoder->StateSize() : 0;
+	Do(p, size);
+	if (p.mode == PointerWrap::MODE_READ) {
+		if (!p.CheckRead(size))
+			return;
+		if (decoder && !decoder->LoadState(*p.ptr, size))
+			decoder->FlushBuffers();
+	} else if (p.mode == PointerWrap::MODE_WRITE && size != 0) {
+		decoder->SaveState(*p.ptr);
+	}
+	p.SkipBytes(size);
 }
 
 void AudioClose(AudioDecoder **ctx) {
@@ -527,7 +557,7 @@ u32 AuCtx::AuResetPlayPosition() {
 }
 
 void AuCtx::DoState(PointerWrap &p) {
-	auto s = p.Section("AuContext", 0, 2);
+	auto s = p.Section("AuContext", 0, 3);
 	if (!s)
 		return;
 
@@ -565,4 +595,6 @@ void AuCtx::DoState(PointerWrap &p) {
 	if (p.mode == p.MODE_READ) {
 		decoder = CreateAudioDecoder((PSPAudioType)audioType);
 	}
+	if (s >= 3)
+		DoAudioDecoderState(p, decoder);
 }

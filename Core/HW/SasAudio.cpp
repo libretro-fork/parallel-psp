@@ -233,7 +233,7 @@ int SasAtrac3::Concatenate(u32 bufPtr, u32 addbytes) {
 }
 
 void SasAtrac3::DoState(PointerWrap &p) {
-	auto s = p.Section("SasAtrac3", 1, 2);
+	auto s = p.Section("SasAtrac3", 1, 3);
 	if (!s)
 		return;
 
@@ -244,6 +244,27 @@ void SasAtrac3::DoState(PointerWrap &p) {
 	}
 	if (s >= 2) {
 		Do(p, end_);
+	}
+	// Samples decoded and not yet mixed, or a load would play them twice or skip them.
+	if (s >= 3) {
+		int queued = sampleQueue_ ? sampleQueue_->getQueueSize() : 0;
+		Do(p, queued);
+		if (p.mode == p.MODE_READ) {
+			if (sampleQueue_)
+				sampleQueue_->clear();
+			if (queued < 0 || queued > 0x20000 || !p.CheckRead(queued)) {
+				p.SetError(PointerWrap::ERROR_FAILURE);
+				return;
+			}
+			if (queued != 0) {
+				if (!sampleQueue_)
+					sampleQueue_ = new BufferQueue();
+				sampleQueue_->push(*p.ptr, queued);
+			}
+		} else if (p.mode == p.MODE_WRITE && queued != 0) {
+			sampleQueue_->get_front(*p.ptr, queued);
+		}
+		p.SkipBytes(queued);
 	}
 }
 

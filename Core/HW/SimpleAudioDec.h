@@ -40,6 +40,12 @@ public:
 	virtual void SetChannels(int channels) = 0;
 	virtual void FlushBuffers() {}
 
+	// What the decoder carries from frame to frame, for savestates. Load refuses what it
+	// cannot take, and a decoder without such state has none.
+	virtual size_t StateSize() const { return 0; }
+	virtual void SaveState(uint8_t *data) const {}
+	virtual bool LoadState(const uint8_t *data, size_t size) { return size == 0; }
+
 	// Just metadata.
 	void SetCtxPtr(uint32_t ptr) { ctxPtr = ptr; }
 	uint32_t GetCtxPtr() const { return ctxPtr; }
@@ -49,6 +55,9 @@ private:
 };
 
 void AudioClose(AudioDecoder **ctx);
+// The decoder's own state, so decoding goes on after a load exactly as it would have. When the
+// state can't be taken (an older or different decoder), it starts over as at a seek.
+void DoAudioDecoderState(PointerWrap &p, AudioDecoder *decoder);
 const char *GetCodecName(int codec);  // audioType
 bool IsValidCodec(PSPAudioType codec);
 AudioDecoder *CreateAudioDecoder(PSPAudioType audioType, int sampleRateHz = 44100, int channels = 2, size_t blockAlign = 0, const uint8_t *extraData = nullptr, size_t extraDataSize = 0);

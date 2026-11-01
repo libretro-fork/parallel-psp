@@ -18,6 +18,14 @@ static bool shutdown_requested;
 static bool exit_seen;
 static unsigned pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static uint64_t video_digest = 1469598103934665603ULL;
+static uint32_t swfb[(1024 + 13) * 1024];
+static unsigned long frames_swfb;
+
+static bool swfb_enabled(void)
+{
+   const char *e = getenv("LRTEST_SWFB");
+   return e && *e;
+}
 static uint64_t audio_digest = 1469598103934665603ULL;
 static unsigned long frames_video, frames_dupe;
 static unsigned long audio_frames;
@@ -111,6 +119,19 @@ static bool environ_cb(unsigned cmd, void *data)
          var->value = option_value(var->key);
          return var->value != NULL;
       }
+      case RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER:
+      {
+         /* Rows padded past the width, so a core that ignores the pitch shows up in the digest. */
+         struct retro_framebuffer *fb = (struct retro_framebuffer *)data;
+         if (!swfb_enabled() || pixel_format != RETRO_PIXEL_FORMAT_XRGB8888
+               || fb->width > 1024 || fb->height > 1024)
+            return false;
+         fb->data = swfb;
+         fb->pitch = (fb->width + 13) * 4;
+         fb->format = RETRO_PIXEL_FORMAT_XRGB8888;
+         fb->memory_flags = 0;
+         return true;
+      }
       case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
          *(bool *)data = false;
          return true;
@@ -138,6 +159,8 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
 {
    unsigned y;
    unsigned bpp = pixel_format == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2;
+   if (data == swfb)
+      frames_swfb++;
    if (!data)
    {
       frames_dupe++;
@@ -317,6 +340,8 @@ int main(int argc, char **argv)
    printf("@@ frames=%d video=%lu dupe=%lu audio_frames=%lu video_digest=%016llx audio_digest=%016llx exit=%d\n",
          ran, frames_video, frames_dupe, audio_frames,
          (unsigned long long)video_digest, (unsigned long long)audio_digest, exit_seen ? 1 : 0);
+   if (swfb_enabled())
+      printf("@@ swfb=%lu\n", frames_swfb);
    if (state_errors)
       printf("FAIL: %d savestate errors\n", state_errors);
    if (log_out)

@@ -165,6 +165,9 @@ public:
 
 	bool GetCurrentFramebuffer(GPUDebugBuffer &buffer, GPUDebugFramebufferType type, int maxRes = -1) override;
 	bool GetOutputFramebuffer(GPUDebugBuffer &buffer) override;
+	// Settles drawing to the display and lends its pixels in place: 480x272 at
+	// *stride pixels per row. False when the display is not a plain VRAM view.
+	bool LendDisplayPixels(const u8 **pixels, int *stride, GEBufferFormat *fmt);
 	bool GetCurrentDepthbuffer(GPUDebugBuffer &buffer) override;
 	bool GetCurrentStencilbuffer(GPUDebugBuffer &buffer) override;
 	bool GetCurrentTexture(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) override;

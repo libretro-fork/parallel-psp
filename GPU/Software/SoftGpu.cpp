@@ -1453,6 +1453,18 @@ bool SoftGPU::GetOutputFramebuffer(GPUDebugBuffer &buffer) {
 	return GetCurrentFramebuffer(buffer, GPU_DBG_FRAMEBUF_DISPLAY, 1);
 }
 
+bool SoftGPU::LendDisplayPixels(const u8 **pixels, int *stride, GEBufferFormat *fmt) {
+	drawEngine_->transformUnit.Flush(this, "output");
+	const int bpp = displayFormat_ == GE_FORMAT_8888 ? 4 : 2;
+	if (DarkStalkersStretchActive() || displayStride_ < FB_WIDTH
+		|| !Memory::IsValidRange(displayFramebuf_, (u32)(displayStride_ * (FB_HEIGHT - 1) + FB_WIDTH) * bpp))
+		return false;
+	*pixels = Memory::GetPointerUnchecked(displayFramebuf_);
+	*stride = displayStride_;
+	*fmt = displayFormat_;
+	return true;
+}
+
 bool SoftGPU::GetCurrentDepthbuffer(GPUDebugBuffer &buffer) {
 	DrawingCoords size = GetTargetSize(gstate.DepthBufStride());
 	buffer.Allocate(size.x, size.y, GPU_DBG_FORMAT_16BIT);

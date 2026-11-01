@@ -83,31 +83,7 @@ bool ConvertFramebufferForLibretro(const GPUDebugBuffer *buffer, u32 stride, u32
 class LibretroSoftwareContext : public LibretroGraphicsContext {
 public:
 	LibretroSoftwareContext() {}
-	void SwapBuffers() override {
-		u32 w = NATIVEWIDTH;
-		u32 h = NATIVEHEIGHT;
-		if (!gpu) {
-			// Nothing rendered yet, dupe the previous frame.
-			video_cb(NULL, w, h, w * sizeof(u32));
-			return;
-		}
-		GPUDebugBuffer buf;
-		gpu->GetOutputFramebuffer(buf);
-		// video_cb is synchronous; keep backing storage across calls and hand
-		// the converted pixels over without another frame-sized allocation.
-		if (!ConvertFramebufferForLibretro(&buf, w, h, pixels_)) {
-			// Unsupported debug buffer format, conversion returned nothing.
-			video_cb(NULL, w, h, w * sizeof(u32));
-			return;
-		}
-		const u32 *data = pixels_.data();
-		if (g_Config.bDisplayCropTo16x9) {
-			// 480x272 -> 480x270: skip the first row, drop the last.
-			data += w;
-			h -= 2;
-		}
-		video_cb(data, w, h, w * sizeof(u32));
-	}
+	void SwapBuffers() override;
 	GPUCore GetGPUCore() override { return GPUCORE_SOFTWARE; }
 	const char *Ident() override { return "Software"; }
 private:

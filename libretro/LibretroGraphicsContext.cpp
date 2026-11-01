@@ -12,6 +12,7 @@
 #include "Core/Config.h"
 #include "Core/System.h"
 #include "GPU/GPUCommon.h"
+#include "GPU/Software/SoftGpu.h"
 
 retro_video_refresh_t LibretroGraphicsContext::video_cb;
 
@@ -162,6 +163,65 @@ LibretroGraphicsContext *LibretroGraphicsContext::CreateGraphicsContext() {
 	ctx = new LibretroSoftwareContext();
 	ctx->InitAPI(nullptr, nullptr, &errorMessage);
 	return ctx;
+}
+
+// One pass from PSP display rows to XRGB8888 rows.
+static void ConvertDisplayRows(const u8 *src, int srcStride, GEBufferFormat fmt, u32 *dst, size_t dstPitch, u32 w, u32 h) {
+	const size_t srcPitch = (size_t)srcStride * (fmt == GE_FORMAT_8888 ? 4 : 2);
+	for (u32 y = 0; y < h; y++, src += srcPitch, dst += dstPitch) {
+		switch (fmt) {
+		case GE_FORMAT_8888: ConvertBGRA8888ToRGBA8888(dst, (const u32 *)src, w); break;
+		case GE_FORMAT_565: ConvertRGB565ToBGRA8888(dst, (const u16 *)src, w); break;
+		case GE_FORMAT_5551: ConvertRGBA5551ToBGRA8888(dst, (const u16 *)src, w); break;
+		case GE_FORMAT_4444: ConvertRGBA4444ToBGRA8888(dst, (const u16 *)src, w); break;
+		default: memset(dst, 0, w * sizeof(u32)); break;
+		}
+	}
+}
+
+void LibretroSoftwareContext::SwapBuffers() {
+	u32 w = NATIVEWIDTH;
+	u32 h = NATIVEHEIGHT;
+	if (!gpu) {
+		// Nothing rendered yet, dupe the previous frame.
+		video_cb(NULL, w, h, w * sizeof(u32));
+		return;
+	}
+	// 480x272 -> 480x270: skip the first row, drop the last.
+	const u32 skip = g_Config.bDisplayCropTo16x9 ? 1 : 0;
+	const u32 outH = h - 2 * skip;
+
+	const u8 *src;
+	int srcStride;
+	GEBufferFormat fmt;
+	if (static_cast<SoftGPU *>(gpu)->LendDisplayPixels(&src, &srcStride, &fmt)) {
+		src += (size_t)skip * srcStride * (fmt == GE_FORMAT_8888 ? 4 : 2);
+		// Convert straight into the frontend's buffer when it lends one.
+		retro_framebuffer fb{};
+		fb.width = w;
+		fb.height = outH;
+		fb.access_flags = RETRO_MEMORY_ACCESS_WRITE;
+		if (Libretro::environ_cb(RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER, &fb) && fb.data
+			&& fb.format == RETRO_PIXEL_FORMAT_XRGB8888 && fb.width == w && fb.height == outH
+			&& fb.pitch >= w * sizeof(u32) && fb.pitch % sizeof(u32) == 0) {
+			ConvertDisplayRows(src, srcStride, fmt, (u32 *)fb.data, fb.pitch / sizeof(u32), w, outH);
+			video_cb(fb.data, w, outH, fb.pitch);
+			return;
+		}
+		pixels_.resize((size_t)w * outH);
+		ConvertDisplayRows(src, srcStride, fmt, pixels_.data(), w, w, outH);
+		video_cb(pixels_.data(), w, outH, w * sizeof(u32));
+		return;
+	}
+
+	GPUDebugBuffer buf;
+	gpu->GetOutputFramebuffer(buf);
+	if (!ConvertFramebufferForLibretro(&buf, w, h, pixels_)) {
+		// Unsupported debug buffer format, conversion returned nothing.
+		video_cb(NULL, w, h, w * sizeof(u32));
+		return;
+	}
+	video_cb(pixels_.data() + (size_t)skip * w, w, outH, w * sizeof(u32));
 }
 
 bool ConvertFramebufferForLibretro(const GPUDebugBuffer *buffer, u32 stride, u32 h, std::vector<u32> &data) {

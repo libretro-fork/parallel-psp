@@ -44,6 +44,24 @@ line=$(LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrtest" "$ro
 rm -rf "$save"
 echo "states $line"
 case "$line" in *FAIL*) echo "FAIL: savestates"; exit 1;; *frames=120*) ;; *) echo "FAIL: savestate run stopped early"; exit 1;; esac
+# Software output converts the display once, into the frontend's own buffer
+# when it lends one (with padded rows) and otherwise into the core's: the
+# pictures must match, cropped or not.
+for crop in disabled enabled; do
+	ref=
+	for swfb in "" 1; do
+		save=$(mktemp -d)
+		out=$(LRTEST_SWFB=$swfb LRTEST_OPT="ppsspp_cropto16x9=$crop" LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrtest" \
+			"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 120 | grep '^@@')
+		rm -rf "$save"
+		line=$(echo "$out" | head -1 | sed -E 's/ dupe=[0-9]+//')
+		echo "software crop=$crop swfb=${swfb:-0} $line"
+		case "$line" in *frames=120*) ;; *) echo "FAIL: software output run"; exit 1;; esac
+		[ -n "$swfb" ] && { echo "$out" | grep -q '^@@ swfb=120$' || { echo "FAIL: frontend buffer not used"; exit 1; }; }
+		[ -z "$ref" ] && ref=$line
+		[ "$line" = "$ref" ] || { echo "FAIL: software output differs with the frontend buffer"; exit 1; }
+	done
+done
 
 # The Vulkan device, negotiated as RetroArch does (v2: made through the
 # frontend's vkCreateDevice wrapper, which adds what the frontend needs, e.g.

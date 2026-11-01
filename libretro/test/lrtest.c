@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "libretro.h"
 
@@ -29,6 +30,56 @@ static bool swfb_enabled(void)
 static uint64_t audio_digest = 1469598103934665603ULL;
 static unsigned long frames_video, frames_dupe;
 static unsigned long audio_frames;
+/* LRTEST_TIME=1: mean time spent in retro_serialize/retro_unserialize. */
+static unsigned long long save_ns, load_ns;
+static unsigned long state_rounds;
+
+/* The last section title before off: printable runs of 4+ chars starting with a capital. */
+static const char *section_before(const unsigned char *b, size_t off)
+{
+   static char name[64];
+   size_t k = off;
+   name[0] = '\0';
+   while (k-- > 0)
+   {
+      size_t e = k, n;
+      if (!(b[k] >= 'A' && b[k] <= 'Z') || (k > 0 && b[k - 1] >= 0x20 && b[k - 1] < 0x7f))
+         continue;
+      while (e < off && b[e] >= 0x20 && b[e] < 0x7f)
+         e++;
+      n = e - k;
+      if (n >= 4 && n < sizeof(name))
+      {
+         memcpy(name, b + k, n);
+         name[n] = '\0';
+         break;
+      }
+   }
+   return name;
+}
+
+static void *state_buf, *again_buf;
+static size_t state_cap, again_cap;
+
+static void *state_buffer(void **buf, size_t *cap, size_t size)
+{
+   if (size > *cap)
+   {
+      void *grown = realloc(*buf, size);
+      if (!grown)
+         return NULL;
+      *buf = grown;
+      *cap = size;
+   }
+   return *buf;
+}
+
+static unsigned long long now_ns(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+}
 static const char *system_dir;
 static const char *save_dir;
 static FILE *log_out;
@@ -54,8 +105,13 @@ static void core_log(enum retro_log_level level, const char *fmt, ...)
    va_start(ap, fmt);
    vsnprintf(buf, sizeof(buf), fmt, ap);
    va_end(ap);
-   if (strstr(buf, "sceKernelExitGame"))
-      exit_seen = true;
+   /* The call itself, "[sceKernel] sceKernelExitGame...", not a mention of it
+    * (a savestate load logs the syscalls it reimports). */
+   {
+      const char *msg = strstr(buf, "] ");
+      if (msg && !strncmp(msg + 2, "sceKernelExitGame", 17))
+         exit_seen = true;
+   }
    /* The emulated program's output is logged as "stdout: ..." / "stderr: ...". */
    {
       const char *p = strstr(buf, "stdout: ");
@@ -220,6 +276,8 @@ int main(int argc, char **argv)
    int state_errors = 0;
    const char *state_dir = getenv("LRTEST_STATE_DIR");
    int state_every = 0;
+   unsigned long long t0;
+   bool ok;
    int reset_at = -1;
    int frames_after_exit = 5;
    int ran = 0;
@@ -300,7 +358,8 @@ int main(int argc, char **argv)
       if (state_every > 0 && i > 0 && i % state_every == 0)
       {
          size_t size = p_retro_serialize_size();
-         void *buf = malloc(size);
+         /* One buffer reused across rounds, as a frontend's run-ahead does. */
+         void *buf = state_buffer(&state_buf, &state_cap, size);
          /* A buffer too small for the state is refused and left untouched. */
          unsigned char small[4096 + 64];
          size_t k;
@@ -312,7 +371,10 @@ int main(int argc, char **argv)
                break;
          if (k != sizeof(small))
             state_errors++;
-         if (buf && p_retro_serialize(buf, size))
+         t0 = now_ns();
+         ok = buf && p_retro_serialize(buf, size);
+         save_ns += now_ns() - t0;
+         if (ok)
          {
             if (state_dir)
             {
@@ -325,16 +387,40 @@ int main(int argc, char **argv)
                   fclose(f);
                }
             }
-            p_retro_unserialize(buf, size);
+            t0 = now_ns();
+            if (!getenv("LRTEST_SAVE_ONLY"))
+               p_retro_unserialize(buf, size);
+            load_ns += now_ns() - t0;
+            state_rounds++;
+            /* LRTEST_IDEMPOTENT=1: a state saved right after loading must be the one loaded. */
+            if (getenv("LRTEST_IDEMPOTENT") && !getenv("LRTEST_SAVE_ONLY"))
+            {
+               unsigned char *again = (unsigned char *)state_buffer(&again_buf, &again_cap, size);
+               if (again && p_retro_serialize(again, size))
+               {
+                  size_t off;
+                  /* Every save bumps the generation counter in the SaveStart header. */
+                  for (off = 32; off < size && ((unsigned char *)buf)[off] == again[off]; off++)
+                     ;
+                  if (off < size)
+                  {
+                     state_errors++;
+                     if (state_errors < 4)
+                        printf("FAIL: frame %d: state changes across a load at offset %zu (%s)\n",
+                              i, off, section_before((const unsigned char *)buf, off));
+                  }
+               }
+            }
          }
          else
             state_errors++;
-         free(buf);
       }
       if (i == reset_at)
          p_retro_reset();
    }
 
+   free(state_buf);
+   free(again_buf);
    p_retro_unload_game();
    p_retro_deinit();
    printf("@@ frames=%d video=%lu dupe=%lu audio_frames=%lu video_digest=%016llx audio_digest=%016llx exit=%d\n",
@@ -342,6 +428,9 @@ int main(int argc, char **argv)
          (unsigned long long)video_digest, (unsigned long long)audio_digest, exit_seen ? 1 : 0);
    if (swfb_enabled())
       printf("@@ swfb=%lu\n", frames_swfb);
+   if (getenv("LRTEST_TIME") && state_rounds)
+      printf("@@ states=%lu save_us=%llu load_us=%llu\n", state_rounds,
+            save_ns / state_rounds / 1000, load_ns / state_rounds / 1000);
    if (state_errors)
       printf("FAIL: %d savestate errors\n", state_errors);
    if (log_out)

@@ -80,6 +80,33 @@ line=$(LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrtest" "$ro
 rm -rf "$save"
 echo "states $line"
 case "$line" in *FAIL*) echo "FAIL: savestates"; exit 1;; *frames=120*) ;; *) echo "FAIL: savestate run stopped early"; exit 1;; esac
+# Run-ahead and rewind load a state saved a moment before, so a save and load must
+# change nothing: each test runs to its end without states and with a round trip
+# every frame, and must show, play and print the same. These cover the kernel's
+# waits and callbacks, the display set up at boot, and GE transfers into VRAM.
+for t in threads/callbacks/intrnotify threads/callbacks/waittypes threads/scheduling/syscallkinds \
+		gpu/transfer/mirrors gpu/transfer/overlap gpu/ge/edramswizzle cpu/cpu_alu/cpu_alu; do
+	dir="$root/pspautotests/tests/$(dirname "$t")"
+	prx="$root/pspautotests/tests/$t.prx"
+	for every in 0 1; do
+		save=$(mktemp -d)
+		res=$(cd "$dir" && LRTEST_LOG="$save/log" LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 \
+			"$here/lrtest" "$root/libretro/ppsspp_libretro.so" "$prx" 900 $every | grep -E '^(@@ frames|FAIL)' | sed -E 's/ dupe=[0-9]+//')
+		printed=$(grep -E '^\[(x|r| |n|-)\]|^\[sceIo\]' "$save/log" | md5sum)
+		rm -rf "$save"
+		if [ $every = 0 ]; then res0=$res; printed0=$printed; else res1=$res; printed1=$printed; fi
+	done
+	echo "round trip $t: $res1"
+	case "$res1" in *exit=1*) ;; *) echo "FAIL: $t did not run to its end with savestates"; exit 1;; esac
+	[ "$res0" = "$res1" ] && [ "$printed0" = "$printed1" ] || { echo "FAIL: $t changes across savestate round trips ($res0)"; exit 1; }
+done
+# Saving straight after a load gives back the state loaded, with video decoding.
+save=$(mktemp -d)
+line=$(cd "$root/pspautotests/tests/video/pmf" && LRTEST_IDEMPOTENT=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 \
+	"$here/lrtest" "$root/libretro/ppsspp_libretro.so" "$root/pspautotests/tests/video/pmf/pmf.prx" 120 1 | grep -E '^(@@ frames|FAIL)')
+rm -rf "$save"
+echo "state idempotence: $line"
+case "$line" in *FAIL*) echo "FAIL: a state saved after loading differs"; exit 1;; *frames=120*) ;; *) echo "FAIL: idempotence run stopped early"; exit 1;; esac
 # Software output converts the display once, into the frontend's own buffer
 # when it lends one (with padded rows) and otherwise into the core's: the
 # pictures must match, cropped or not.

@@ -484,8 +484,12 @@ SoftGPU::~SoftGPU() {
 }
 
 void SoftGPU::SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) {
-	// Seems like this can point into RAM, but should be VRAM if not in RAM.
-	displayFramebuf_ = (framebuf & 0xFF000000) == 0 ? 0x44000000 | framebuf : framebuf;
+	// Seems like this can point into RAM, but should be VRAM if not in RAM. Zero turns the
+	// display off, as sceDisplaySetFrameBuf and the hardware backends have it.
+	if (framebuf == 0)
+		displayFramebuf_ = 0;
+	else
+		displayFramebuf_ = (framebuf & 0xFF000000) == 0 ? 0x44000000 | framebuf : framebuf;
 	displayStride_ = stride;
 	displayFormat_ = format;
 

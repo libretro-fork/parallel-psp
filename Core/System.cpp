@@ -51,6 +51,7 @@
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/Plugins.h"
 #include "Core/HLE/ReplaceTables.h"
+#include "Core/HLE/sceDisplay.h"
 #include "Core/HLE/sceKernel.h"
 #include "Core/HLE/sceUtility.h"
 #include "Core/HW/Display.h"
@@ -695,6 +696,12 @@ static bool InitGPU(std::string *error_string) {
 			SetBootState(BootState::Failed);
 			return false;
 		}
+		// The display starts out on sceDisplay's framebuffer, as it is after a savestate load.
+		PSPPointer<u8> topaddr;
+		u32 linesize = 512;
+		GEBufferFormat format = GE_FORMAT_8888;
+		__DisplayGetFramebuf(&topaddr, &linesize, &format, 0);  // The current one, not the latched.
+		gpu->SetDisplayFramebuffer(topaddr.ptr, linesize, format);
 	}
 	return true;
 }

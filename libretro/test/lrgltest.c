@@ -186,6 +186,8 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
       fnv(&h, pixels, (size_t)width * height * 4);
       printf("@lit %016llx\n", (unsigned long long)h);
    }
+   else if (getenv("LRGL_FRAMES"))
+      printf("@dark\n");
 }
 
 static size_t audio_batch_cb(const int16_t *data, size_t frames)

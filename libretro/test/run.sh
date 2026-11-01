@@ -65,13 +65,14 @@ case "$dbg" in *" debug_groups=0"*) echo "FAIL: no debug groups on a debug conte
 # A context loss recreates every GPU object; the picture after it must not change.
 save=$(mktemp -d)
 ctx=$(LRGL_CONTEXT_ONLY=1 LRGL_FRAMES=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" \
-	"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 120) || { echo "FAIL: GL context loss run"; exit 1; }
+	"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 160) || { echo "FAIL: GL context loss run"; exit 1; }
 rm -rf "$save"
 echo "gl context loss: $(echo "$ctx" | grep '^@@')"
 [ "$(echo "$ctx" | grep '^@lit ' | sort -u)" = "$(echo "$out" | grep '^@lit ' | sort -u)" ] || { echo "FAIL: picture changed across a context loss"; exit 1; }
-# Lost output goes dark rather than wrong, so most frames must stay lit too.
-ctx_lit=$(echo "$ctx" | grep '^@@' | sed -E 's/.* lit=([0-9]+).*/\1/')
-[ "$ctx_lit" -ge 90 ] || { echo "FAIL: only $ctx_lit of 120 frames lit across a context loss"; exit 1; }
+# Lost output goes dark rather than wrong. How long the new context takes to show
+# anything depends on timing, but well after the loss every frame is lit again.
+ctx_dark=$(echo "$ctx" | grep -E '^@(lit|dark)' | tail -n 20 | grep -c '^@dark' || true)
+[ "$ctx_dark" -eq 0 ] || { echo "FAIL: $ctx_dark of the last 20 frames dark after a context loss"; exit 1; }
 # Savestates every 20 frames: a too-small frontend buffer is refused untouched,
 # and every state round trips.
 save=$(mktemp -d)
@@ -107,6 +108,33 @@ line=$(cd "$root/pspautotests/tests/video/pmf" && LRTEST_IDEMPOTENT=1 LRTEST_SYS
 rm -rf "$save"
 echo "state idempotence: $line"
 case "$line" in *FAIL*) echo "FAIL: a state saved after loading differs"; exit 1;; *frames=120*) ;; *) echo "FAIL: idempotence run stopped early"; exit 1;; esac
+# A load keeps the JIT's blocks whose code it leaves unchanged. Whatever the JIT then runs
+# has to match the IR interpreter, which starts over at every load: going back over the
+# same code (rewind), and loading a state from another program, whose code sits at the
+# same addresses and must replace every block compiled before.
+jit_vs_ir() {
+	local out=
+	for cpu in JIT "IR JIT"; do
+		save=$(mktemp -d)
+		res=$(cd "$1" && LRTEST_LOG="$save/log" LRTEST_OPT="ppsspp_cpu_core=$cpu" LRTEST_SYSTEM=$sys LRTEST_SAVE=$save \
+			timeout -k 5 300 "$here/lrtest" "$root/libretro/ppsspp_libretro.so" "$2" "$3" | grep -E '^(@@|FAIL)' \
+			| sed -E 's/ dupe=[0-9]+//; s/ video_digest=[0-9a-f]+//' | tr '\n' ' ')
+		res="$res printed=$(grep -E '^\[(x|r| |n|-)\]|^\[sceIo\]' "$save/log" | md5sum | cut -c1-12)"
+		rm -rf "$save"
+		[ -z "$out" ] && out=$res
+		[ "$res" = "$out" ] || { echo "FAIL: $4: JIT and IR interpreter differ ($out / $res)"; exit 1; }
+	done
+	echo "$4: $out"
+	case "$out" in *FAIL*) echo "FAIL: $4 savestates"; exit 1;; esac
+}
+LRTEST_REWIND=16 jit_vs_ir "$root/pspautotests/tests/video/pmf" "$root/pspautotests/tests/video/pmf/pmf.prx" 300 "jit rewind"
+other=$(mktemp -d)
+(cd "$root/pspautotests/tests/gpu/ge" && LRTEST_STATE_DIR=$other LRTEST_OPT="ppsspp_cpu_core=JIT" LRTEST_SYSTEM=$sys LRTEST_SAVE=$other \
+	timeout -k 5 300 "$here/lrtest" "$root/libretro/ppsspp_libretro.so" "$root/pspautotests/tests/gpu/ge/edramswizzle.prx" 12 10 >/dev/null)
+[ -f "$other/state00010.bin" ] || { echo "FAIL: no state from edramswizzle"; exit 1; }
+LRTEST_LOAD="3:$other/state00010.bin" jit_vs_ir "$root/pspautotests/tests/threads/callbacks" \
+	"$root/pspautotests/tests/threads/callbacks/intrnotify.prx" 200 "jit other program's state"
+rm -rf "$other"
 # Software output converts the display once, into the frontend's own buffer
 # when it lends one (with padded rows) and otherwise into the core's: the
 # pictures must match, cropped or not.

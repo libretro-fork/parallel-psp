@@ -387,6 +387,49 @@ std::vector<u32> JitBlockCache::SaveAndClearEmuHackOps() {
 	return result;
 }
 
+static uint64_t HashBlockCode(const JitBlock &b) {
+	if (!Memory::IsValidRange(b.originalAddress, b.originalSize * 4))
+		return 0;
+	// Never 0, which marks a block not to keep.
+	return XXH3_64bits(Memory::GetPointerUnchecked(b.originalAddress), b.originalSize * 4) | 1;
+}
+
+std::vector<uint64_t> JitBlockCache::HashCodeForLoad() const {
+	std::vector<uint64_t> hashes(num_blocks_);
+	for (int block_num = 0; block_num < num_blocks_; ++block_num) {
+		const JitBlock &b = blocks_[block_num];
+		hashes[block_num] = b.invalid ? 0 : HashBlockCode(b);
+	}
+	return hashes;
+}
+
+bool JitBlockCache::KeepUnchangedAfterLoad(const std::vector<uint64_t> &hashes, const std::vector<u32> &replaced) {
+	if ((int)hashes.size() != num_blocks_)
+		return false;
+	// Decide every block before writing any emuhack, since blocks can overlap.
+	std::vector<bool> keep(num_blocks_);
+	for (int block_num = 0; block_num < num_blocks_; ++block_num) {
+		const JitBlock &b = blocks_[block_num];
+		// A block compiled over a replacement runs it, and either state may not have it.
+		const auto hook = std::lower_bound(replaced.begin(), replaced.end(), b.originalAddress);
+		const bool coversReplacement = hook != replaced.end() && *hook < b.originalAddress + b.originalSize * 4;
+		keep[block_num] = !b.invalid && hashes[block_num] != 0 && !coversReplacement
+			&& !MIPS_IS_REPLACEMENT(b.originalFirstOpcode.encoding)
+			&& Memory::ReadUnchecked_U32(b.originalAddress) == b.originalFirstOpcode.encoding
+			&& HashBlockCode(b) == hashes[block_num];
+	}
+	// With no emuhack in memory, destroying writes nothing and unlinks what jumps in.
+	for (int block_num = 0; block_num < num_blocks_; ++block_num) {
+		if (!keep[block_num] && !blocks_[block_num].invalid)
+			DestroyBlock(block_num, DestroyType::INVALIDATE);
+	}
+	for (int block_num = 0; block_num < num_blocks_; ++block_num) {
+		if (keep[block_num])
+			Memory::Write_Opcode_JIT(blocks_[block_num].originalAddress, GetEmuHackOpForBlock(block_num));
+	}
+	return true;
+}
+
 void JitBlockCache::RestoreSavedEmuHackOps(const std::vector<u32> &saved) {
 	if (num_blocks_ != (int)saved.size()) {
 		ERROR_LOG(Log::JIT, "RestoreSavedEmuHackOps: Wrong saved block size.");

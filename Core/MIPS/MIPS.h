@@ -189,6 +189,9 @@ public:
 	void Init();
 	void Shutdown();
 	void Reset();
+	// A savestate load sets this around DoState to keep the jit's blocks: it checks them
+	// against the loaded memory itself once the whole state is in.
+	void SetKeepJitOnLoad(bool keep) { keepJitOnLoad_ = keep; }
 	void UpdateCore(CPUCore desired);
 
 	void DoState(PointerWrap &p);
@@ -293,6 +296,8 @@ private:
 	// Doesn't need save stating.
 	std::vector<PendingCacheOperation> pendingInvalidates_;
 	bool invalidateAll_ = false;
+	bool keepJitOnLoad_ = false;
+	void ResetRegisters();
 };
 
 class MIPSDebugInterface;

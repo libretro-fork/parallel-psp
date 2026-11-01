@@ -137,6 +137,18 @@ static retro_atomic_int_t g_screenshotFailures{ 0 };
 	// we should probably just read back memory then instead (GTA for example). But this is a really unimportant edge case,
 	// when in-game it's just not an issue.
 
+	// The jit's own state, as a savestate holds it.
+	static std::vector<u8> JitStateBytes() {
+		u8 *ptr = nullptr;
+		PointerWrap measure(&ptr, PointerWrap::MODE_MEASURE);
+		MIPSComp::jit->DoState(measure);
+		std::vector<u8> bytes(measure.Offset());
+		ptr = bytes.data();
+		PointerWrap write(&ptr, PointerWrap::MODE_WRITE);
+		MIPSComp::jit->DoState(write);
+		return bytes;
+	}
+
 	void SaveStart::DoState(PointerWrap &p) {
 		// Nothing may still be writing PSP memory while it's saved, or be left to write into what's loaded.
 		__SasWaitForMix();
@@ -178,6 +190,17 @@ static retro_atomic_int_t g_screenshotFailures{ 0 };
 		std::map<u32, u32> savedReplacements;
 		if (p.mode != p.MODE_MEASURE)
 			savedReplacements = SaveAndClearReplacements();
+		// A load keeps the jit blocks whose code it leaves as it was, where the jit has a block
+		// cache: they are hashed over memory with no emuhacks here, and again once it is all in.
+		JitBlockCache *keptBlocks = p.mode == p.MODE_READ && MIPSComp::jit ? MIPSComp::jit->GetBlockCache() : nullptr;
+		std::vector<uint64_t> codeHashes;
+		std::vector<u8> jitAssumptions;
+		if (keptBlocks) {
+			MIPSComp::jit->SaveAndClearEmuHackOps();
+			codeHashes = keptBlocks->HashCodeForLoad();
+			jitAssumptions = JitStateBytes();
+			currentMIPS->SetKeepJitOnLoad(true);
+		}
 		if (MIPSComp::jit && (p.mode == p.MODE_WRITE || p.mode == p.MODE_VERIFY)) {
 			if (MIPSComp::jit) {
 				std::vector<u32> savedBlocks;
@@ -217,6 +240,23 @@ static retro_atomic_int_t g_screenshotFailures{ 0 };
 		}
 		// Kernel object destructors might close open files, so do the filesystem last.
 		pspFileSystem.DoState(p);
+
+		if (keptBlocks) {
+			currentMIPS->SetKeepJitOnLoad(false);
+			const std::map<u32, u32> replacements = SaveAndClearReplacements();
+			// All blocks go if the jit's own state (VFPU prefixes, rounding) changed, as do
+			// those over an address replaced before or after the load.
+			std::vector<u32> replaced;
+			for (const auto &[addr, op] : savedReplacements)
+				replaced.push_back(addr);
+			for (const auto &[addr, op] : replacements)
+				replaced.push_back(addr);
+			std::sort(replaced.begin(), replaced.end());
+			if (p.error != PointerWrap::ERROR_NONE || JitStateBytes() != jitAssumptions
+				|| !keptBlocks->KeepUnchangedAfterLoad(codeHashes, replaced))
+				MIPSComp::jit->ClearCache();
+			RestoreSavedReplacements(replacements);
+		}
 	}
 
 	void Enqueue(const SaveState::Operation &op) {

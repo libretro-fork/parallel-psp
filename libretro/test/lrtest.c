@@ -276,6 +276,12 @@ int main(int argc, char **argv)
    int state_errors = 0;
    const char *state_dir = getenv("LRTEST_STATE_DIR");
    int state_every = 0;
+   const int rewind_every = getenv("LRTEST_REWIND") ? atoi(getenv("LRTEST_REWIND")) : 0;
+   void *rewind_buf = NULL;
+   size_t rewind_cap = 0, rewind_size = 0;
+   bool rewind_ok = false;
+   unsigned long rewinds = 0;
+   const int load_at = getenv("LRTEST_LOAD") && strchr(getenv("LRTEST_LOAD"), ':') ? atoi(getenv("LRTEST_LOAD")) : -1;
    unsigned long long t0;
    bool ok;
    int reset_at = -1;
@@ -415,12 +421,47 @@ int main(int argc, char **argv)
          else
             state_errors++;
       }
+      /* LRTEST_REWIND=N: save every N frames and load it N/2 frames later, the way rewind
+       * and run-ahead go back over code that has run since. */
+      if (rewind_every >= 2 && i > 0)
+      {
+         if (i % rewind_every == 0)
+         {
+            size_t size = p_retro_serialize_size();
+            rewind_ok = state_buffer(&rewind_buf, &rewind_cap, size) && p_retro_serialize(rewind_buf, size);
+            rewind_size = size;
+         }
+         else if (i % rewind_every == rewind_every / 2 && rewind_ok)
+         {
+            if (p_retro_unserialize(rewind_buf, rewind_size))
+               rewinds++;
+            else
+               state_errors++;
+         }
+      }
+      /* LRTEST_LOAD=frame:path loads a state file (from LRTEST_STATE_DIR) at that frame. */
+      if (load_at == i)
+      {
+         FILE *f = fopen(strchr(getenv("LRTEST_LOAD"), ':') + 1, "rb");
+         long len = -1;
+         void *data = NULL;
+         if (f && !fseek(f, 0, SEEK_END) && (len = ftell(f)) > 0 && !fseek(f, 0, SEEK_SET)
+               && (data = malloc((size_t)len)) && fread(data, 1, (size_t)len, f) == (size_t)len
+               && p_retro_unserialize(data, (size_t)len))
+            printf("@@ loaded at %d\n", i);
+         else
+            state_errors++;
+         free(data);
+         if (f)
+            fclose(f);
+      }
       if (i == reset_at)
          p_retro_reset();
    }
 
    free(state_buf);
    free(again_buf);
+   free(rewind_buf);
    p_retro_unload_game();
    p_retro_deinit();
    printf("@@ frames=%d video=%lu dupe=%lu audio_frames=%lu video_digest=%016llx audio_digest=%016llx exit=%d\n",
@@ -428,6 +469,8 @@ int main(int argc, char **argv)
          (unsigned long long)video_digest, (unsigned long long)audio_digest, exit_seen ? 1 : 0);
    if (swfb_enabled())
       printf("@@ swfb=%lu\n", frames_swfb);
+   if (rewind_every >= 2)
+      printf("@@ rewinds=%lu\n", rewinds);
    if (getenv("LRTEST_TIME") && state_rounds)
       printf("@@ states=%lu save_us=%llu load_us=%llu\n", state_rounds,
             save_ns / state_rounds / 1000, load_ns / state_rounds / 1000);

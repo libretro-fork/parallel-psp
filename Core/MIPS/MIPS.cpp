@@ -267,6 +267,18 @@ void MIPSState::Reset() {
 }
 
 void MIPSState::Init() {
+	ResetRegisters();
+
+	if (PSP_CoreParameter().cpuCore == CPUCore::JIT || PSP_CoreParameter().cpuCore == CPUCore::JIT_IR) {
+		MIPSComp::jit = MIPSComp::CreateNativeJit(this, PSP_CoreParameter().cpuCore == CPUCore::JIT_IR);
+	} else if (PSP_CoreParameter().cpuCore == CPUCore::IR_INTERPRETER) {
+		MIPSComp::jit = new MIPSComp::IRJit(this, false);
+	} else {
+		MIPSComp::jit = nullptr;
+	}
+}
+
+void MIPSState::ResetRegisters() {
 	memset(r, 0, sizeof(r));
 	memset(f, 0, sizeof(f));
 	memset(v, 0, sizeof(v));
@@ -300,14 +312,6 @@ void MIPSState::Init() {
 	downcount = 0;
 
 	memset(vcmpResult, 0, sizeof(vcmpResult));
-
-	if (PSP_CoreParameter().cpuCore == CPUCore::JIT || PSP_CoreParameter().cpuCore == CPUCore::JIT_IR) {
-		MIPSComp::jit = MIPSComp::CreateNativeJit(this, PSP_CoreParameter().cpuCore == CPUCore::JIT_IR);
-	} else if (PSP_CoreParameter().cpuCore == CPUCore::IR_INTERPRETER) {
-		MIPSComp::jit = new MIPSComp::IRJit(this, false);
-	} else {
-		MIPSComp::jit = nullptr;
-	}
 }
 
 bool MIPSState::HasDefaultPrefix() const {
@@ -360,9 +364,17 @@ void MIPSState::DoState(PointerWrap &p) {
 	if (!s)
 		return;
 
-	// Reset the jit if we're loading.
-	if (p.mode == p.MODE_READ)
-		Reset();
+	// Reset the jit if we're loading, unless the load keeps it (see SetKeepJitOnLoad). Pending
+	// invalidations were for the memory being replaced; the load checks every block instead.
+	if (p.mode == p.MODE_READ) {
+		if (keepJitOnLoad_ && MIPSComp::jit) {
+			pendingInvalidates_.clear();
+			invalidateAll_ = false;
+			ResetRegisters();
+		} else {
+			Reset();
+		}
+	}
 	// Assume we're not saving state during a CPU core reset, so no lock.
 	if (MIPSComp::jit)
 		MIPSComp::jit->DoState(p);

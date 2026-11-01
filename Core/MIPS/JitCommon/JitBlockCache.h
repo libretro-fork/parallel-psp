@@ -156,6 +156,12 @@ public:
 	// No jit operations may be run between these calls.
 	// Meant to be used to make memory safe for savestates, memcpy, etc.
 	std::vector<u32> SaveAndClearEmuHackOps();
+	// A savestate load keeps the blocks whose code it leaves as it was. Both take memory with
+	// no emuhacks or replacements in it: the first before the load, the second after, which
+	// destroys the blocks that changed or cover a replaced address (sorted), puts the others'
+	// emuhacks back and returns false if it could not tell.
+	std::vector<uint64_t> HashCodeForLoad() const;
+	bool KeepUnchangedAfterLoad(const std::vector<uint64_t> &hashes, const std::vector<u32> &replaced);
 	void RestoreSavedEmuHackOps(const std::vector<u32> &saved);
 
 	int GetNumBlocks() const override { return num_blocks_; }

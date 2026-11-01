@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "Common/Math/math_util.h"
+#include "Common/Serialize/SerializeFuncs.h"
 #include "Core/Config.h"
 #include "Core/HW/SasAudio.h"
 #include "Core/HW/SasReverb.h"
@@ -204,6 +205,20 @@ void SasReverb::SetPreset(int preset) {
 	ApplyParams();
 }
 
+void SasReverb::DoState(PointerWrap &p) {
+	const int size = preset_ != -1 ? presets[preset_].size : 0;
+	int saved = size;
+	Do(p, saved);
+	Do(p, pos_);
+	if (p.mode == PointerWrap::MODE_READ && (saved != size || (size != 0 && (pos_ < BUFSIZE - size || pos_ >= BUFSIZE)))) {
+		p.SetError(PointerWrap::ERROR_FAILURE);
+		SetPreset(preset_);
+		return;
+	}
+	if (size != 0)
+		DoArray(p, workspace_ + BUFSIZE - size, size);
+}
+
 void SasReverb::SetParams(int delay, int feedback) {
 	delay_ = delay;
 	feedback_ = feedback;
@@ -325,8 +340,9 @@ void SasReverb::ProcessReverb(int16_t *output, const int16_t *input, size_t inpu
 		b[d.mLDIFF] = clamp_s16(Lin + (b[d.dRDIFF] * d.vWALL >> 15) - (b[d.mLDIFF - 1]*d.vIIR >> 15) + b[d.mLDIFF - 1]); // R - to - L
 		b[d.mRDIFF] = clamp_s16(Rin + (b[d.dLDIFF] * d.vWALL >> 15) - (b[d.mRDIFF - 1]*d.vIIR >> 15) + b[d.mRDIFF - 1]); // L - to - R
 		// ___Early Echo(Comb Filter, with input from buffer)__________________________
-		int32_t Lout = ((d.vCOMB1*b[d.mLCOMB1] + d.vCOMB2*b[d.mLCOMB2] + d.vCOMB3*b[d.mLCOMB3] + d.vCOMB4*b[d.mLCOMB4]) >> 15);
-		int32_t Rout = ((d.vCOMB1*b[d.mRCOMB1] + d.vCOMB2*b[d.mRCOMB2] + d.vCOMB3*b[d.mRCOMB3] + d.vCOMB4*b[d.mRCOMB4]) >> 15);
+		// Four full-scale products overflow 32 bits.
+		int32_t Lout = (int32_t)(((int64_t)d.vCOMB1*b[d.mLCOMB1] + (int64_t)d.vCOMB2*b[d.mLCOMB2] + (int64_t)d.vCOMB3*b[d.mLCOMB3] + (int64_t)d.vCOMB4*b[d.mLCOMB4]) >> 15);
+		int32_t Rout = (int32_t)(((int64_t)d.vCOMB1*b[d.mRCOMB1] + (int64_t)d.vCOMB2*b[d.mRCOMB2] + (int64_t)d.vCOMB3*b[d.mRCOMB3] + (int64_t)d.vCOMB4*b[d.mRCOMB4]) >> 15);
 		// ___Late Reverb APF1(All Pass Filter 1, with input from COMB)________________
 		b[d.mLAPF1] = clamp_s16(Lout - (d.vAPF1*b[(d.mLAPF1 - d.dAPF1)] >> 15));
 		Lout = b[(d.mLAPF1 - d.dAPF1)] + (b[d.mLAPF1] * d.vAPF1 >> 15);
@@ -338,8 +354,8 @@ void SasReverb::ProcessReverb(int16_t *output, const int16_t *input, size_t inpu
 		b[d.mRAPF2] = clamp_s16(Rout - (d.vAPF2*b[(d.mRAPF2 - d.dAPF2)] >> 15));
 		Rout = b[(d.mRAPF2 - d.dAPF2)] + (b[d.mRAPF2] * d.vAPF2 >> 15);
 		// ___Output to Mixer(Output volume multiplied with input from APF2)___________
-		output[i * 4 + 0] = clamp_s16((Lout * volLeft) >> 15);
-		output[i * 4 + 1] = clamp_s16((Rout * volRight) >> 15);
+		output[i * 4 + 0] = clamp_s16((int)(((int64_t)Lout * volLeft) >> 15));
+		output[i * 4 + 1] = clamp_s16((int)(((int64_t)Rout * volRight) >> 15));
 		output[i * 4 + 2] = 0;
 		output[i * 4 + 3] = 0;
 

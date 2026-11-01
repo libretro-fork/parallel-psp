@@ -789,7 +789,7 @@ void SasInstance::ApplyWaveformEffect() {
 }
 
 void SasInstance::DoState(PointerWrap &p) {
-	auto s = p.Section("SasInstance", 1);
+	auto s = p.Section("SasInstance", 1, 2);
 	if (!s)
 		return;
 
@@ -840,6 +840,8 @@ void SasInstance::DoState(PointerWrap &p) {
 		// their parameters from the delay/feedback we just restored.
 		reverb_.SetParams(waveformEffect.delay, waveformEffect.feedback);
 	}
+	if (s >= 2)
+		reverb_.DoState(p);
 }
 
 void SasVoice::Reset() {

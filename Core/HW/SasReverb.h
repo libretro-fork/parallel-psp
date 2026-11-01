@@ -18,6 +18,7 @@
 #pragma once
 
 struct SasReverbData;
+class PointerWrap;
 
 class SasReverb {
 public:
@@ -35,6 +36,9 @@ public:
 	// Input should be a mixdown of all the channels that have reverb enabled, at 22khz.
 	// Output is written back at 44khz.
 	void ProcessReverb(int16_t *output, const int16_t *input, size_t inputSize, int volLeft, int volRight);
+
+	// The delay lines, after SetPreset and SetParams have restored the preset.
+	void DoState(PointerWrap &p);
 
 private:
 	enum {

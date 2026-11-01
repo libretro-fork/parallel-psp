@@ -9,6 +9,7 @@
 #include "Common/GPU/OpenGL/GLFrameData.h"
 #include "Common/GPU/OpenGL/GLProfiler.h"
 #include "Common/GPU/DataFormat.h"
+#include "Common/Thread/MpscQueue.h"
 #include "Common/GPU/Shader.h"
 #include <memory>
 #include "Common/GPU/thin3d.h"
@@ -29,15 +30,22 @@ struct GLDelayedReadbackResult {
 };
 
 // CPU cache is emulation-thread owned. PBOs and fences are render-thread owned.
-// A single-slot mailbox transfers ownership of the latest completed CPU copy.
+// A single-slot mailbox transfers ownership of the latest completed CPU copy; results
+// the emulation thread is done with come back through a queue, so the same few go round.
 struct GLDelayedReadback {
 	GLRect2D cachedRect{};
 	std::vector<uint8_t> cachedPixels;
 	bool disabled = false;
 	retro_atomic_ptr_t completed{nullptr};
+	MpscQueue<GLDelayedReadbackResult *> returned;
+	std::vector<GLDelayedReadbackResult *> spares;  // Render thread.
 	~GLDelayedReadback();
 	std::unique_ptr<GLDelayedReadbackResult> Take();
-	void Publish(GLDelayedReadbackResult result);
+	// Emulation thread: a taken result, back for reuse.
+	void Return(std::unique_ptr<GLDelayedReadbackResult> result);
+	// Render thread: a result to fill, then publish.
+	GLDelayedReadbackResult *Acquire();
+	void Publish(GLDelayedReadbackResult *result);
 	GLRect2D gpuRect{};
 	GLuint buffers[2]{};
 	GLsync fences[2]{};
@@ -378,6 +386,9 @@ struct GLRStep {
 			int aspectMask;
 			Draw::DataFormat dstFormat;
 			bool delayed;
+			// When set, the pixels go straight here (RGBA8888, directStride pixels per row).
+			uint8_t *directDst;
+			int directStride;
 		} readback;
 		struct {
 			GLRTexture *texture;

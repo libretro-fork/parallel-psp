@@ -9,6 +9,7 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 
 "$here/atrac3ptest"
 "$here/mediatest"
+"$here/gldelayedtest"
 "$here/vkheaptest"
 # The Vulkan heap is C89 for MSVC: no C99 in it.
 cc -std=c89 -ansi -pedantic -Werror=pedantic -Werror=declaration-after-statement -Wno-long-long \
@@ -40,6 +41,16 @@ save=$(mktemp -d)
 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" "$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 300 \
 	|| { echo "FAIL: GL backend run"; exit 1; }
 rm -rf "$save"
+# The same dump without the stops: it shows one picture, so every lit frame
+# must be that one, with no GL errors.
+save=$(mktemp -d)
+out=$(LRGL_PLAIN=1 LRGL_FRAMES=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" \
+	"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 120) || { echo "FAIL: GL plain run"; exit 1; }
+rm -rf "$save"
+pictures=$(echo "$out" | grep '^@lit ' | sort -u | wc -l)
+echo "gl plain: $(echo "$out" | grep '^@@') pictures=$pictures"
+case "$out" in *"gl_errors=0"*) ;; *) echo "FAIL: GL errors"; exit 1;; esac
+[ "$pictures" -eq 1 ] || { echo "FAIL: GL showed $pictures different pictures of one"; exit 1; }
 # Savestates every 20 frames: a too-small frontend buffer is refused untouched,
 # and every state round trips.
 save=$(mktemp -d)

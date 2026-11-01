@@ -152,15 +152,24 @@ static void video_cb(const void *data, unsigned width, unsigned height, size_t p
    p_glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
    if (glGetError() != GL_NO_ERROR)
       gl_errors++;
+   bool lit = false;
    for (size_t i = 0; i < (size_t)width * height * 4; i += 4)
    {
       if (pixels[i] || pixels[i + 1] || pixels[i + 2])
       {
          lit_frames++;
+         lit = true;
          break;
       }
    }
    fnv(&video_digest, pixels, (size_t)width * height * 4);
+   if (getenv("LRGL_FRAMES") && lit)
+   {
+      /* Each lit picture's own hash, for what was shown regardless of timing. */
+      uint64_t h = 1469598103934665603ULL;
+      fnv(&h, pixels, (size_t)width * height * 4);
+      printf("@lit %016llx\n", (unsigned long long)h);
+   }
 }
 
 static size_t audio_batch_cb(const int16_t *data, size_t frames)
@@ -243,6 +252,7 @@ static bool make_context(EGLDisplay *out_dpy)
 
 int main(int argc, char **argv)
 {
+   const bool plain = getenv("LRGL_PLAIN") && *getenv("LRGL_PLAIN");
    void (*p_retro_init)(void);
    void (*p_retro_deinit)(void);
    void (*p_retro_set_environment)(retro_environment_t);
@@ -329,7 +339,10 @@ int main(int argc, char **argv)
       booted = true;
       ran++;
 
-      /* Each of these pauses or stops the emu thread and starts it again. */
+      /* Each of these pauses or stops the emu thread and starts it again.
+       * LRGL_PLAIN=1 only runs frames, for pictures that compare across builds. */
+      if (plain)
+         continue;
       if (i == frames / 6)
       {
          size_t size = p_retro_serialize_size();

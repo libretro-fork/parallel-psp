@@ -383,11 +383,19 @@ bool GLRenderManager::CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBit
 				delayed->disabled = true;
 				cached = false;
 			} else if (cached && matches(result->rect)) {
-				delayed->cachedPixels = std::move(result->pixels);
+				// Swapped, so the old pixels' storage goes back to be filled next.
+				delayed->cachedPixels.swap(result->pixels);
 			}
+			delayed->Return(std::move(result));
 		}
 	}
 	step->readback.delayed = cached;
+	// A plain colour readback in the destination's own format goes straight there.
+	const bool direct = !cached && !delayed && aspectBits == GL_COLOR_BUFFER_BIT &&
+		destFormat == Draw::DataFormat::R8G8B8A8_UNORM &&
+		(pixelStride == w || !gl_extensions.IsGLES || gl_extensions.GLES3);
+	step->readback.directDst = direct ? pixels : nullptr;
+	step->readback.directStride = pixelStride;
 	step->dependencies.insert(src);
 	step->tag = tag;
 	steps_.push_back(step);
@@ -404,6 +412,9 @@ bool GLRenderManager::CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBit
 		queueRunner_.CopyFromReadbackBuffer(src, w, h, Draw::DataFormat::R8G8B8A8_UNORM,
 			Draw::DataFormat::R8G8B8A8_UNORM, w, delayed->cachedPixels.data());
 	}
+
+	if (direct)
+		return true;
 
 	Draw::DataFormat srcFormat;
 	if (aspectBits & GL_COLOR_BUFFER_BIT) {

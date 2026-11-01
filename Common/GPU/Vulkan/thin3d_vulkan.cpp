@@ -1671,7 +1671,7 @@ void VKContext::DrawIndexedUP(const void *vdata, int vertexCount, const void *id
 	uint32_t ibBindOffset;
 	uint8_t *idataPtr = push_->Allocate(idataSize, 4, &vulkanIbuf, &ibBindOffset);
 	_assert_(idataPtr != nullptr);
-	memcpy(idataPtr, vdata, idataSize);
+	memcpy(idataPtr, idata, idataSize);
 
 	uint32_t ubo_offset = (uint32_t)curPipeline_->PushUBO(push_, vulkan_, &vulkanUBObuf);
 

@@ -41,6 +41,10 @@
 #include "GPU/GPUCommon.h"
 #include "GPU/GPUState.h"
 
+// For a stack XXH3_state_t.
+#define XXH_STATIC_LINKING_ONLY
+#include "ext/xxhash.h"
+
 static size_t FormatFramebufferName(const VirtualFramebuffer *vfb, char *tag, size_t len) {
 	return snprintf(tag, len, "FB_%08x_%08x_%dx%d_%s", vfb->fb_address, vfb->z_address, vfb->bufferWidth, vfb->bufferHeight, GeBufferFormatToString(vfb->fb_format));
 }
@@ -1452,13 +1456,12 @@ Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, G
 	if (widthInBytes == srcStrideInBytes) {
 		imageHash = XXH3_64bits(srcPixels, widthInBytes * height);
 	} else {
-		XXH3_state_t *hashState = XXH3_createState();
-		XXH3_64bits_reset(hashState);
+		XXH3_state_t hashState;
+		XXH3_64bits_reset(&hashState);
 		for (int y = 0; y < height; y++) {
-			XXH3_64bits_update(hashState, srcPixels + srcStrideInBytes * y, widthInBytes);
+			XXH3_64bits_update(&hashState, srcPixels + srcStrideInBytes * y, widthInBytes);
 		}
-		imageHash = XXH3_64bits_digest(hashState);
-		XXH3_freeState(hashState);
+		imageHash = XXH3_64bits_digest(&hashState);
 	}
 
 	Draw::DataFormat texFormat = Draw::DataFormat::R8G8B8A8_UNORM;

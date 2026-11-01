@@ -1898,7 +1898,7 @@ void VKRPipelineLayout::FlushDescSets(VulkanContext *vulkan, int frame, QueuePro
 		// This is where we look up to see if we already have an identical descriptor previously in the array.
 		// We could do a simple custom hash map here that doesn't handle collisions, since those won't matter.
 		// Instead, for now we just check history one item backwards. Good enough, it seems.
-		if (index > start + 1) {
+		if (index > start) {
 			if (descSets[index - 1].count == d.count) {
 				if (!memcmp(descData.data() + d.offset, descData.data() + descSets[index - 1].offset, d.count * sizeof(PackedDescriptor))) {
 					d.set = descSets[index - 1].set;

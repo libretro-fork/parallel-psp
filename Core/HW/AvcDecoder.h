@@ -57,6 +57,12 @@ public:
 	// Throws away any decoder state, for a seek or a new stream.
 	void Flush();
 
+	// The decoder's state between access units, for savestates. Size 0: none to give (a
+	// frontend decoder), and the load of a state the decoder cannot take fails.
+	size_t StateSize();
+	size_t SaveState(u8 *data, size_t size);
+	bool LoadState(const u8 *data, size_t size);
+
 	bool HasFrame() const { return haveFrame_; }
 
 	// What the last Decode or Drain did: a frame out (1), nothing yet (0), the unit refused (-1),

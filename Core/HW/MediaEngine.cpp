@@ -98,7 +98,7 @@ void MediaEngine::closeMedia() {
 }
 
 void MediaEngine::DoState(PointerWrap &p) {
-	auto s = p.Section("MediaEngine", 1, 8);
+	auto s = p.Section("MediaEngine", 1, 9);
 	if (!s)
 		return;
 
@@ -166,6 +166,94 @@ void MediaEngine::DoState(PointerWrap &p) {
 	// from before lose the drain of the last pictures.
 	if (s >= 8) {
 		Do(p, m_psFed);
+	}
+	// The video side as it stands: the stream bytes not yet decoded, the decoder's pictures,
+	// and the frame on show. States from before restart the decoder at the next key frame.
+	if (s >= 9)
+		DoVideoState(p, hasopencontext != 0);
+}
+
+void MediaEngine::DoVideoState(PointerWrap &p, bool open) {
+	auto s = p.Section("MediaEngineVideo", 1, 1);
+	if (!s)
+		return;
+	// Sizes as u64, whatever size_t is where the state was made.
+	std::vector<u64> auPos, packEnds;
+	std::vector<s64> auPts;
+	u64 auBase = m_auBase, auScan = m_auScan;
+	if (p.mode != PointerWrap::MODE_READ) {
+		for (const auto &e : m_auPts) {
+			auPos.push_back(e.first);
+			auPts.push_back(e.second);
+		}
+		packEnds.assign(m_packEnds.begin(), m_packEnds.end());
+	}
+	Do(p, m_au);
+	Do(p, m_decodeUnit);
+	Do(p, m_retryDecode);
+	Do(p, m_retryPts);
+	Do(p, auBase);
+	Do(p, auScan);
+	Do(p, m_auHasSlice);
+	Do(p, auPos);
+	Do(p, auPts);
+	Do(p, m_pendingPts);
+	Do(p, packEnds);
+	Do(p, m_packPending);
+	Do(p, m_decodingsize);
+
+	// The decoder: without a state to give (or take) it starts over, as after a seek.
+	u32 size = 0;
+	if (p.mode != PointerWrap::MODE_READ && open && m_avc)
+		size = (u32)m_avc->StateSize();
+	Do(p, size);
+	if (p.mode == PointerWrap::MODE_READ) {
+		if (!p.CheckRead(size))
+			return;
+		if (open && m_avc && size && !m_avc->LoadState(*p.ptr, size))
+			m_avc->Flush();
+	} else if (p.mode == PointerWrap::MODE_WRITE && size) {
+		if (m_avc->SaveState(*p.ptr, size) != size)
+			p.SetError(PointerWrap::ERROR_FAILURE);
+	}
+	p.SkipBytes(size);
+
+	// The frame on show, which a game may ask for again before the next one.
+	u32 frameBytes = 0;
+	if (p.mode != PointerWrap::MODE_READ && m_buffer && ensureFramePixels())
+		frameBytes = (u32)((size_t)m_desWidth * m_desHeight * 4);
+	Do(p, m_desWidth);
+	Do(p, m_desHeight);
+	Do(p, frameBytes);
+	if (p.mode == PointerWrap::MODE_READ) {
+		if (!p.CheckRead(frameBytes))
+			return;
+		if (m_gpuVideoFrame) m_gpuVideoFrame->Release();
+		m_gpuVideoFrame = nullptr;
+		m_cpuFrameReady = true;
+		// The buffer is always the size the dimensions say, or none.
+		delete[] m_buffer;
+		m_buffer = nullptr;
+		if (m_desWidth > 0 && m_desHeight > 0 && m_desWidth <= 4096 && m_desHeight <= 4096
+				&& frameBytes == (u32)((size_t)m_desWidth * m_desHeight * 4)) {
+			m_buffer = new u8[frameBytes];
+			memcpy(m_buffer, *p.ptr, frameBytes);
+		}
+	} else if (p.mode == PointerWrap::MODE_WRITE && frameBytes) {
+		memcpy(*p.ptr, m_buffer, frameBytes);
+	}
+	p.SkipBytes(frameBytes);
+
+	if (p.mode == PointerWrap::MODE_READ) {
+		m_auBase = (size_t)auBase;
+		m_auScan = (size_t)auScan;
+		m_auPts.clear();
+		for (size_t i = 0; i < auPos.size() && i < auPts.size(); i++)
+			m_auPts.push_back(std::make_pair((size_t)auPos[i], auPts[i]));
+		m_packEnds.assign(packEnds.begin(), packEnds.end());
+		m_videoBusy = false;
+		if (!open)
+			clearUnits();
 	}
 }
 

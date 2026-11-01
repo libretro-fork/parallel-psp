@@ -85,11 +85,13 @@ case "$line" in *FAIL*) echo "FAIL: savestates"; exit 1;; *frames=120*) ;; *) ec
 # Run-ahead and rewind load a state saved a moment before, so a save and load must
 # change nothing: each test runs to its end without states and with a round trip
 # every frame, and must show, play and print the same. These cover the kernel's
-# waits and callbacks, the display set up at boot, GE transfers into VRAM, and the
-# ATRAC and MP3 decoders' history.
+# waits and callbacks, the display set up at boot, GE transfers into VRAM, the
+# ATRAC and MP3 decoders' history, and the H.264 decoder's pictures with the stream
+# not yet decoded.
 for t in threads/callbacks/intrnotify threads/callbacks/waittypes threads/scheduling/syscallkinds \
 		gpu/transfer/mirrors gpu/transfer/overlap gpu/ge/edramswizzle cpu/cpu_alu/cpu_alu \
-		audio/atrac/replay audio/mp3/mp3test audio/mp3/stream; do
+		audio/atrac/replay audio/mp3/mp3test audio/mp3/stream \
+		video/mpeg/basic video/pmf/pmf video/pmf_simple/pmf_simple; do
 	dir="$root/pspautotests/tests/$(dirname "$t")"
 	prx="$root/pspautotests/tests/$t.prx"
 	for every in 0 1; do

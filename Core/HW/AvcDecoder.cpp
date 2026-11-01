@@ -67,6 +67,22 @@ void AvcDecoder::Close() {
 	dec_ = nullptr;
 }
 
+size_t AvcDecoder::StateSize() {
+	return dec_ ? rh264_video_state_size(dec_) : 0;
+}
+
+size_t AvcDecoder::SaveState(u8 *data, size_t size) {
+	return dec_ ? rh264_video_save_state(dec_, data, size) : 0;
+}
+
+bool AvcDecoder::LoadState(const u8 *data, size_t size) {
+	// The frame last handed out is the decoder's no more.
+	haveFrame_ = false;
+	pendingPlanes_ = false;
+	lastResult_ = 0;
+	return dec_ && rh264_video_load_state(dec_, data, size) == 0;
+}
+
 bool AvcDecoder::IsAvailable() {
 	return true;
 }

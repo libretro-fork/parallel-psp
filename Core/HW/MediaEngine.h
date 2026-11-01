@@ -113,6 +113,7 @@ private:
 	bool streamFed() const;
 	void clearUnits();
 	bool ensureFramePixels();
+	void DoVideoState(PointerWrap &p, bool open);
 	void dropOldestPts();
 
 public:  // TODO: Very little of this below should be public.

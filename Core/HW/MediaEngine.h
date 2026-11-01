@@ -75,6 +75,10 @@ public:
 	int writeVideoImage(u32 bufferPtr, int frameWidth = 512, int videoPixelMode = 3);
 	int writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int videoPixelMode,
 	                             int xpos, int ypos, int width, int height);
+	// Writes the clipped rect of a decoded frame as PSP rows, swizzled if asked. Returns the
+	// destination bytes the caller must own: (frameWidth * bpp) * height.
+	static int WriteVideoRows(u8 *dest, bool swizzle, int frameWidth, int videoPixelMode,
+		const u8 *src, int srcWidth, int srcHeight, int xpos, int ypos, int width, int height);
 	int getAudioSamples(u32 bufferPtr);
 
 	// PMP (homebrew) video: one access unit decoded, and the frame it gave, if any, converted
@@ -94,6 +98,8 @@ public:
 	void DoState(PointerWrap &p);
 
 private:
+	int writeVideoRect(u32 bufferPtr, int frameWidth, int videoPixelMode,
+		int xpos, int ypos, int width, int height, const char *tag);
 	bool SetupStreams();
 	int getNextAudioFrame(u8 **buf, int *headerCode1, int *headerCode2);
 

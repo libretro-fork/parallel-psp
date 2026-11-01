@@ -689,6 +689,58 @@ bool MediaEngine::ensureFramePixels() {
 	return true;
 }
 
+static int VideoLineBytes(int frameWidth, int videoPixelMode) {
+	switch (videoPixelMode) {
+	case GE_CMODE_32BIT_ABGR8888:
+		return frameWidth * (int)sizeof(u32);
+	case GE_CMODE_16BIT_BGR5650:
+	case GE_CMODE_16BIT_ABGR5551:
+	case GE_CMODE_16BIT_ABGR4444:
+		return frameWidth * (int)sizeof(u16);
+	}
+	return 0;
+}
+
+int MediaEngine::WriteVideoRows(u8 *dest, bool swizzle, int frameWidth, int videoPixelMode,
+	const u8 *src, int srcWidth, int srcHeight, int xpos, int ypos, int width, int height) {
+	const int videoLineSize = VideoLineBytes(frameWidth, videoPixelMode);
+	const int imageSize = videoLineSize * height;
+	if (width > srcWidth - xpos)
+		width = srcWidth - xpos;
+	if (height > srcHeight - ypos)
+		height = srcHeight - ypos;
+	// A row never runs past its destination line.
+	if (width > frameWidth)
+		width = frameWidth;
+	if (xpos < 0 || ypos < 0 || width <= 0 || height <= 0)
+		return imageSize;
+
+	u8 *rows = dest;
+	if (swizzle) {
+		// The swizzle reads whole 8-row blocks.
+		rows = new u8[(size_t)videoLineSize * ((height + 7) & ~7)]();
+	}
+
+	const int srcBpp = videoPixelMode == GE_CMODE_32BIT_ABGR8888 ? 4 : 2;
+	const u8 *data = src + ((size_t)ypos * srcWidth + xpos) * srcBpp;
+	for (int y = 0; y < height; y++) {
+		u8 *line = rows + (size_t)videoLineSize * y;
+		switch (videoPixelMode) {
+		case GE_CMODE_32BIT_ABGR8888: writeVideoLineRGBA(line, data, width); break;
+		case GE_CMODE_16BIT_BGR5650: writeVideoLineABGR5650(line, data, width); break;
+		case GE_CMODE_16BIT_ABGR5551: writeVideoLineABGR5551(line, data, width); break;
+		case GE_CMODE_16BIT_ABGR4444: writeVideoLineABGR4444(line, data, width); break;
+		}
+		data += (size_t)srcWidth * srcBpp;
+	}
+
+	if (swizzle) {
+		DoSwizzleTex16((const u32 *)rows, dest, videoLineSize / 16, (height + 7) / 8, videoLineSize);
+		delete[] rows;
+	}
+	return imageSize;
+}
+
 int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMode) {
 	m_gpuVideoWrite = false;
 	if (m_gpuVideoFrame && gpu && videoPixelMode == GE_CMODE_32BIT_ABGR8888
@@ -697,190 +749,38 @@ int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMo
 		return frameWidth * m_desHeight * 4;
 	}
 	if (!ensureFramePixels()) return 0;
-	int videoLineSize = 0;
-	switch (videoPixelMode) {
-	case GE_CMODE_32BIT_ABGR8888:
-		videoLineSize = frameWidth * sizeof(u32);
-		break;
-	case GE_CMODE_16BIT_BGR5650:
-	case GE_CMODE_16BIT_ABGR5551:
-	case GE_CMODE_16BIT_ABGR4444:
-		videoLineSize = frameWidth * sizeof(u16);
-		break;
-	}
-
-	int videoImageSize = videoLineSize * m_desHeight;
-
-	if (!Memory::IsValidRange(bufferPtr, videoImageSize) || frameWidth > 2048) {
-		// Clearly invalid values.  Let's just not.
-		ERROR_LOG(Log::ME, "Ignoring invalid video decode address %08x/%x", bufferPtr, frameWidth);
-		return 0;
-	}
-
-	Memory::PrepareVideoMemoryAccess(bufferPtr, videoImageSize);
-	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
-
-	if (!m_buffer)
-		return 0;
-
-	// lock the image size
-	int height = m_desHeight;
-	int width = m_desWidth;
-	u8 *imgbuf = buffer;
-	const u8 *data = m_buffer;
-
-	bool swizzle = Memory::IsVRAMAddress(bufferPtr) && (bufferPtr & 0x00200000) == 0x00200000;
-	if (swizzle) {
-		imgbuf = new u8[videoImageSize];
-	}
-
-	switch (videoPixelMode) {
-	case GE_CMODE_32BIT_ABGR8888:
-		for (int y = 0; y < height; y++) {
-			writeVideoLineRGBA(imgbuf + videoLineSize * y, data, width);
-			data += width * sizeof(u32);
-		}
-		break;
-
-	case GE_CMODE_16BIT_BGR5650:
-		for (int y = 0; y < height; y++) {
-			writeVideoLineABGR5650(imgbuf + videoLineSize * y, data, width);
-			data += width * sizeof(u16);
-		}
-		break;
-
-	case GE_CMODE_16BIT_ABGR5551:
-		for (int y = 0; y < height; y++) {
-			writeVideoLineABGR5551(imgbuf + videoLineSize * y, data, width);
-			data += width * sizeof(u16);
-		}
-		break;
-
-	case GE_CMODE_16BIT_ABGR4444:
-		for (int y = 0; y < height; y++) {
-			writeVideoLineABGR4444(imgbuf + videoLineSize * y, data, width);
-			data += width * sizeof(u16);
-		}
-		break;
-
-	default:
-		ERROR_LOG(Log::ME, "Unsupported video pixel format %d", videoPixelMode);
-		break;
-	}
-
-	if (swizzle) {
-		const int bxc = videoLineSize / 16;
-		int byc = (height + 7) / 8;
-		if (byc == 0)
-			byc = 1;
-
-		DoSwizzleTex16((const u32 *)imgbuf, buffer, bxc, byc, videoLineSize);
-		delete [] imgbuf;
-	}
-
-	NotifyMemInfo(MemBlockFlags::WRITE, bufferPtr, videoImageSize, "VideoDecode");
-
-	return videoImageSize;
+	return writeVideoRect(bufferPtr, frameWidth, videoPixelMode, 0, 0, m_desWidth, m_desHeight, "VideoDecode");
 }
 
 int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int videoPixelMode,
 	                             int xpos, int ypos, int width, int height) {
 	m_gpuVideoWrite = false;
 	if (!ensureFramePixels()) return 0;
-	int videoLineSize = 0;
-	switch (videoPixelMode) {
-	case GE_CMODE_32BIT_ABGR8888:
-		videoLineSize = frameWidth * sizeof(u32);
-		break;
-	case GE_CMODE_16BIT_BGR5650:
-	case GE_CMODE_16BIT_ABGR5551:
-	case GE_CMODE_16BIT_ABGR4444:
-		videoLineSize = frameWidth * sizeof(u16);
-		break;
-	}
-	int videoImageSize = videoLineSize * height;
+	return writeVideoRect(bufferPtr, frameWidth, videoPixelMode, xpos, ypos, width, height, "VideoDecodeRange");
+}
 
-	if (!Memory::IsValidRange(bufferPtr, videoImageSize) || frameWidth > 2048) {
+int MediaEngine::writeVideoRect(u32 bufferPtr, int frameWidth, int videoPixelMode,
+	int xpos, int ypos, int width, int height, const char *tag) {
+	if (VideoLineBytes(frameWidth, videoPixelMode) == 0) {
+		ERROR_LOG(Log::ME, "Unsupported video pixel format %d", videoPixelMode);
+		return 0;
+	}
+	const int videoImageSize = VideoLineBytes(frameWidth, videoPixelMode) * height;
+	const bool swizzle = Memory::IsVRAMAddress(bufferPtr) && (bufferPtr & 0x00200000) == 0x00200000;
+	// A swizzled write covers whole 8-row blocks.
+	const int touched = swizzle ? VideoLineBytes(frameWidth, videoPixelMode) * ((height + 7) & ~7) : videoImageSize;
+	if (!Memory::IsValidRange(bufferPtr, touched) || frameWidth > 2048) {
 		// Clearly invalid values.  Let's just not.
 		ERROR_LOG(Log::ME, "Ignoring invalid video decode address %08x/%x", bufferPtr, frameWidth);
 		return 0;
 	}
-
-	Memory::PrepareVideoMemoryAccess(bufferPtr, videoImageSize);
-	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
-
 	if (!m_buffer)
 		return 0;
 
-	// lock the image size
-	u8 *imgbuf = buffer;
-	const u8 *data = m_buffer;
-
-	bool swizzle = Memory::IsVRAMAddress(bufferPtr) && (bufferPtr & 0x00200000) == 0x00200000;
-	if (swizzle) {
-		imgbuf = new u8[videoImageSize];
-	}
-
-	if (width > m_desWidth - xpos)
-		width = m_desWidth - xpos;
-	if (height > m_desHeight - ypos)
-		height = m_desHeight - ypos;
-
-	switch (videoPixelMode) {
-	case GE_CMODE_32BIT_ABGR8888:
-		data += (ypos * m_desWidth + xpos) * sizeof(u32);
-		for (int y = 0; y < height; y++) {
-			writeVideoLineRGBA(imgbuf, data, width);
-			data += m_desWidth * sizeof(u32);
-			imgbuf += videoLineSize;
-		}
-		break;
-
-	case GE_CMODE_16BIT_BGR5650:
-		data += (ypos * m_desWidth + xpos) * sizeof(u16);
-		for (int y = 0; y < height; y++) {
-			writeVideoLineABGR5650(imgbuf, data, width);
-			data += m_desWidth * sizeof(u16);
-			imgbuf += videoLineSize;
-		}
-		break;
-
-	case GE_CMODE_16BIT_ABGR5551:
-		data += (ypos * m_desWidth + xpos) * sizeof(u16);
-		for (int y = 0; y < height; y++) {
-			writeVideoLineABGR5551(imgbuf, data, width);
-			data += m_desWidth * sizeof(u16);
-			imgbuf += videoLineSize;
-		}
-		break;
-
-	case GE_CMODE_16BIT_ABGR4444:
-		data += (ypos * m_desWidth + xpos) * sizeof(u16);
-		for (int y = 0; y < height; y++) {
-			writeVideoLineABGR4444(imgbuf, data, width);
-			data += m_desWidth * sizeof(u16);
-			imgbuf += videoLineSize;
-		}
-		break;
-
-	default:
-		ERROR_LOG(Log::ME, "Unsupported video pixel format %d", videoPixelMode);
-		break;
-	}
-
-	if (swizzle) {
-		WARN_LOG_ONCE(vidswizzle, Log::ME, "Swizzling Video with range");
-
-		const int bxc = videoLineSize / 16;
-		int byc = (height + 7) / 8;
-		if (byc == 0)
-			byc = 1;
-
-		DoSwizzleTex16((const u32 *)imgbuf, buffer, bxc, byc, videoLineSize);
-		delete [] imgbuf;
-	}
-	NotifyMemInfo(MemBlockFlags::WRITE, bufferPtr, videoImageSize, "VideoDecodeRange");
-
+	Memory::PrepareVideoMemoryAccess(bufferPtr, touched);
+	WriteVideoRows(Memory::GetPointerWriteUnchecked(bufferPtr), swizzle, frameWidth, videoPixelMode,
+		m_buffer, m_desWidth, m_desHeight, xpos, ypos, width, height);
+	NotifyMemInfo(MemBlockFlags::WRITE, bufferPtr, videoImageSize, tag);
 	return videoImageSize;
 }
 

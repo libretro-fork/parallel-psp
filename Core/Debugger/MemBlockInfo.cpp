@@ -77,8 +77,13 @@ private:
 	static inline bool Same(const Slab *a, const Slab *b);
 	void Merge(Slab *a, Slab *b);
 	void FillHeads(Slab *slab);
+	Slab *NewSlab();
+	void FreeSlab(Slab *slab);
+	void FreeSpares();
 
 	Slab *first_ = nullptr;
+	// Slabs dropped by Merge, linked through next and reused by Split.
+	Slab *spare_ = nullptr;
 	Slab *lastFind_ = nullptr;
 	std::vector<Slab *> heads_;
 	Slab *bulkStorage_ = nullptr;
@@ -177,7 +182,7 @@ const char *MemSlabMap::FastFindWriteTag(MemBlockFlags flags, uint32_t addr, uin
 void MemSlabMap::Reset() {
 	Clear();
 
-	first_ = new Slab();
+	first_ = NewSlab();
 	first_->end = MAX_SIZE;
 	lastFind_ = first_;
 
@@ -197,7 +202,10 @@ void MemSlabMap::DoState(PointerWrap &p) {
 		Slab *oldBulk = bulkStorage_;
 		Do(p, count);
 
-		first_ = new Slab();
+		// Spares may live in the old bulk array, which goes away below.
+		FreeSpares();
+
+		first_ = NewSlab();
 		first_->DoState(p);
 		lastFind_ = first_;
 		--count;
@@ -279,6 +287,7 @@ void MemSlabMap::Clear() {
 			delete s;
 		s = next;
 	}
+	FreeSpares();
 	delete [] bulkStorage_;
 	bulkStorage_ = nullptr;
 	first_ = nullptr;
@@ -303,8 +312,35 @@ MemSlabMap::Slab *MemSlabMap::FindSlab(uint32_t addr) {
 	return nullptr;
 }
 
+MemSlabMap::Slab *MemSlabMap::NewSlab() {
+	Slab *slab = spare_;
+	if (slab == nullptr)
+		return new Slab();
+	spare_ = slab->next;
+	// Bulk slabs stay owned by their array.
+	bool bulk = slab->bulkStorage;
+	*slab = Slab();
+	slab->bulkStorage = bulk;
+	return slab;
+}
+
+void MemSlabMap::FreeSlab(Slab *slab) {
+	slab->prev = nullptr;
+	slab->next = spare_;
+	spare_ = slab;
+}
+
+void MemSlabMap::FreeSpares() {
+	while (spare_ != nullptr) {
+		Slab *next = spare_->next;
+		if (!spare_->bulkStorage)
+			delete spare_;
+		spare_ = next;
+	}
+}
+
 MemSlabMap::Slab *MemSlabMap::Split(Slab *slab, uint32_t size) {
-	Slab *next = new Slab();
+	Slab *next = NewSlab();
 	next->start = slab->start + size;
 	next->end = slab->end;
 	next->ticks = slab->ticks;
@@ -375,8 +411,7 @@ void MemSlabMap::Merge(Slab *a, Slab *b) {
 	}
 	if (lastFind_ == b)
 		lastFind_ = a;
-	if (!b->bulkStorage)
-		delete b;
+	FreeSlab(b);
 }
 
 void MemSlabMap::FillHeads(Slab *slab) {

@@ -124,6 +124,9 @@ protected:
 	Draw::SamplerState *samplerNearest_ = nullptr;
 	Draw::SamplerState *samplerLinear_ = nullptr;
 	Draw::Buffer *vdata_ = nullptr;
+	// What vdata_ holds, so an unchanged layout is not uploaded again.
+	uint8_t vdataContents_[96];
+	bool vdataValid_ = false;
 
 	Draw::Texture *srcTexture_ = nullptr;
 	Draw::Framebuffer *srcFramebuffer_ = nullptr;

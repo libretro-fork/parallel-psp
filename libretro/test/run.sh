@@ -10,6 +10,7 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 "$here/atrac3ptest"
 "$here/mediatest"
 "$here/gldelayedtest"
+"$here/mbitest"
 "$here/vkheaptest"
 # The Vulkan heap is C89 for MSVC: no C99 in it.
 cc -std=c89 -ansi -pedantic -Werror=pedantic -Werror=declaration-after-statement -Wno-long-long \
@@ -51,6 +52,26 @@ pictures=$(echo "$out" | grep '^@lit ' | sort -u | wc -l)
 echo "gl plain: $(echo "$out" | grep '^@@') pictures=$pictures"
 case "$out" in *"gl_errors=0"*) ;; *) echo "FAIL: GL errors"; exit 1;; esac
 [ "$pictures" -eq 1 ] || { echo "FAIL: GL showed $pictures different pictures of one"; exit 1; }
+# Nothing reads debug groups on a plain context, so the core must not push any;
+# a debug context gets them, and the same picture.
+case "$out" in *" debug_groups=0"*) ;; *) echo "FAIL: debug groups on a plain context"; exit 1;; esac
+save=$(mktemp -d)
+dbg=$(LRGL_DEBUG_CONTEXT=1 LRGL_PLAIN=1 LRGL_FRAMES=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" \
+	"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 120) || { echo "FAIL: GL debug context run"; exit 1; }
+rm -rf "$save"
+echo "gl debug: $(echo "$dbg" | grep '^@@')"
+case "$dbg" in *" debug_groups=0"*) echo "FAIL: no debug groups on a debug context"; exit 1;; esac
+[ "$(echo "$dbg" | grep '^@lit ' | sort -u)" = "$(echo "$out" | grep '^@lit ' | sort -u)" ] || { echo "FAIL: debug context picture differs"; exit 1; }
+# A context loss recreates every GPU object; the picture after it must not change.
+save=$(mktemp -d)
+ctx=$(LRGL_CONTEXT_ONLY=1 LRGL_FRAMES=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" \
+	"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 120) || { echo "FAIL: GL context loss run"; exit 1; }
+rm -rf "$save"
+echo "gl context loss: $(echo "$ctx" | grep '^@@')"
+[ "$(echo "$ctx" | grep '^@lit ' | sort -u)" = "$(echo "$out" | grep '^@lit ' | sort -u)" ] || { echo "FAIL: picture changed across a context loss"; exit 1; }
+# Lost output goes dark rather than wrong, so most frames must stay lit too.
+ctx_lit=$(echo "$ctx" | grep '^@@' | sed -E 's/.* lit=([0-9]+).*/\1/')
+[ "$ctx_lit" -ge 90 ] || { echo "FAIL: only $ctx_lit of 120 frames lit across a context loss"; exit 1; }
 # Savestates every 20 frames: a too-small frontend buffer is refused untouched,
 # and every state round trips.
 save=$(mktemp -d)

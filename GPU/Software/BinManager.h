@@ -18,6 +18,8 @@
 #pragma once
 
 #include <unordered_map>
+#include <utility>
+#include <vector>
 #include <retro_atomic.h>
 #include "GPU/Software/Rasterizer.h"
 
@@ -333,7 +335,10 @@ private:
 	BinWaitable *waitable_ = nullptr;
 
 	BinDirtyRange pendingWrites_[2]{};
-	std::unordered_map<uint32_t, BinDirtyRange> pendingReads_;
+	// Keyed by the address that was read; cleared on flush without freeing.
+	std::vector<std::pair<uint32_t, BinDirtyRange>> pendingReads_;
+	BinDirtyRange *FindPendingRead(uint32_t key);
+	BinDirtyRange &PendingRead(uint32_t key);
 
 	// Whether the current state textures from what it draws to, and the texture as it was before the
 	// primitive being drawn for one that does.

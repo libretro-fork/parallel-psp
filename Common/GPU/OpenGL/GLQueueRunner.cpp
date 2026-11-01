@@ -17,6 +17,19 @@
 #include "GLRenderManager.h"
 #include "DataFormatGL.h"
 
+#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#include "Common/CommonWindows.h"
+#elif defined(__linux__) && !defined(__ANDROID__)
+#include <dlfcn.h>
+#endif
+
+#ifndef GL_CONTEXT_FLAGS
+#define GL_CONTEXT_FLAGS 0x821E
+#endif
+#ifndef GL_CONTEXT_FLAG_DEBUG_BIT
+#define GL_CONTEXT_FLAG_DEBUG_BIT 0x00000002
+#endif
+
 // These are the same value, alias for simplicity.
 #if defined(GL_CLIP_DISTANCE0_EXT) && !defined(GL_CLIP_DISTANCE0)
 #define GL_CLIP_DISTANCE0 GL_CLIP_DISTANCE0_EXT
@@ -73,10 +86,29 @@ void GLQueueRunner::CreateDeviceObjects() {
 	CHECK_GL_ERROR_IF_DEBUG();
 
 #if !PPSSPP_ARCH(X86)  // Doesn't work on AMD for some reason. See issue #17787
-	useDebugGroups_ = !gl_extensions.IsGLES && gl_extensions.VersionGEThan(4, 3);
+	// Every group costs the driver a string copy and allocations, so only push them
+	// when something reads them: a debug context or a capture tool in the process.
+	if (!gl_extensions.IsGLES && gl_extensions.VersionGEThan(4, 3)) {
+		GLint flags = 0;
+		glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
+		useDebugGroups_ = (flags & GL_CONTEXT_FLAG_DEBUG_BIT) != 0 || CaptureToolLoaded();
+	}
 #endif
 
 	profiler_.Init();
+}
+
+bool GLQueueRunner::CaptureToolLoaded() {
+#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+	return GetModuleHandleA("renderdoc.dll") != nullptr;
+#elif defined(__linux__) && !defined(__ANDROID__)
+	void *lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
+	if (lib)
+		dlclose(lib);
+	return lib != nullptr;
+#else
+	return false;
+#endif
 }
 
 void GLQueueRunner::DestroyDeviceObjects() {

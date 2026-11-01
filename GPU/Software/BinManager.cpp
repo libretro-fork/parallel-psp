@@ -387,17 +387,17 @@ void BinManager::MarkPendingReads(const Rasterizer::RasterizerState &state) {
 		uint32_t byteStride = (state.texbufw[i] * textureBits) / 8;
 		uint32_t byteWidth = (state.samplerID.cached.sizes[i].w * textureBits) / 8;
 		uint32_t h = state.samplerID.cached.sizes[i].h;
-		auto it = pendingReads_.find(state.texaddr[i]);
-		if (it != pendingReads_.end()) {
+		BinDirtyRange *found = FindPendingRead(state.texaddr[i]);
+		if (found) {
 			uint32_t total = byteStride * (h - 1) + byteWidth;
-			uint32_t existing = it->second.strideBytes * (it->second.height - 1) + it->second.widthBytes;
+			uint32_t existing = found->strideBytes * (found->height - 1) + found->widthBytes;
 			if (existing < total) {
-				it->second.strideBytes = std::max(it->second.strideBytes, byteStride);
-				it->second.widthBytes = std::max(it->second.widthBytes, byteWidth);
-				it->second.height = std::max(it->second.height, h);
+				found->strideBytes = std::max(found->strideBytes, byteStride);
+				found->widthBytes = std::max(found->widthBytes, byteWidth);
+				found->height = std::max(found->height, h);
 			}
 		} else {
-			auto &range = pendingReads_[state.texaddr[i]];
+			auto &range = PendingRead(state.texaddr[i]);
 			range.base = state.texaddr[i];
 			range.strideBytes = byteStride;
 			range.widthBytes = byteWidth;
@@ -418,8 +418,24 @@ void BinManager::MarkPendingWrites(const Rasterizer::RasterizerState &state) {
 	} else if (gstate.isDepthTestEnabled() && !gstate.isModeClear()) {
 		// Testing without writing still reads the depth buffer, so a transfer into it has to wait.
 		const uint32_t depthAddr = gstate.getDepthBufAddress() & mirrorMask;
-		pendingReads_[depthAddr].Expand(depthAddr, 2, gstate.DepthBufStride(), scissorTL, scissorBR);
+		PendingRead(depthAddr).Expand(depthAddr, 2, gstate.DepthBufStride(), scissorTL, scissorBR);
 	}
+}
+
+BinDirtyRange *BinManager::FindPendingRead(uint32_t key) {
+	for (auto &pair : pendingReads_) {
+		if (pair.first == key)
+			return &pair.second;
+	}
+	return nullptr;
+}
+
+BinDirtyRange &BinManager::PendingRead(uint32_t key) {
+	BinDirtyRange *found = FindPendingRead(key);
+	if (found)
+		return *found;
+	pendingReads_.emplace_back(key, BinDirtyRange{});
+	return pendingReads_.back().second;
 }
 
 inline void BinDirtyRange::Expand(uint32_t newBase, uint32_t bpp, uint32_t stride, const DrawingCoords &tl, const DrawingCoords &br) {

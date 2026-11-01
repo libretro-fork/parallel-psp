@@ -75,9 +75,25 @@ static const char *option_value(const char *key)
 
 static uintptr_t get_fb(void) { return fbo; }
 
+/* Debug groups the core pushes; a plain context should see none. */
+static unsigned long debug_groups;
+static PFNGLPUSHDEBUGGROUPPROC real_push_debug_group;
+
+static void APIENTRY count_push_debug_group(GLenum source, GLuint id, GLsizei length, const GLchar *message)
+{
+   __atomic_fetch_add(&debug_groups, 1, __ATOMIC_RELAXED);
+   real_push_debug_group(source, id, length, message);
+}
+
 static retro_proc_address_t get_proc(const char *sym)
 {
-   return (retro_proc_address_t)eglGetProcAddress(sym);
+   retro_proc_address_t fn = (retro_proc_address_t)eglGetProcAddress(sym);
+   if (fn && !strcmp(sym, "glPushDebugGroup"))
+   {
+      real_push_debug_group = (PFNGLPUSHDEBUGGROUPPROC)fn;
+      return (retro_proc_address_t)count_push_debug_group;
+   }
+   return fn;
 }
 
 static bool environ_cb(unsigned cmd, void *data)
@@ -214,6 +230,11 @@ static bool make_context(EGLDisplay *out_dpy)
       ctx_attr[n++] = EGL_CONTEXT_OPENGL_PROFILE_MASK;
       ctx_attr[n++] = EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT;
    }
+   if (getenv("LRGL_DEBUG_CONTEXT") && *getenv("LRGL_DEBUG_CONTEXT"))
+   {
+      ctx_attr[n++] = EGL_CONTEXT_OPENGL_DEBUG;
+      ctx_attr[n++] = EGL_TRUE;
+   }
    ctx_attr[n] = EGL_NONE;
    ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
    if (ctx == EGL_NO_CONTEXT || !eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx))
@@ -253,6 +274,9 @@ static bool make_context(EGLDisplay *out_dpy)
 int main(int argc, char **argv)
 {
    const bool plain = getenv("LRGL_PLAIN") && *getenv("LRGL_PLAIN");
+   /* LRGL_CONTEXT_ONLY=1: plain frames plus one context loss, which must not
+    * change the picture. */
+   const bool context_only = getenv("LRGL_CONTEXT_ONLY") && *getenv("LRGL_CONTEXT_ONLY");
    void (*p_retro_init)(void);
    void (*p_retro_deinit)(void);
    void (*p_retro_set_environment)(retro_environment_t);
@@ -343,6 +367,16 @@ int main(int argc, char **argv)
        * LRGL_PLAIN=1 only runs frames, for pictures that compare across builds. */
       if (plain)
          continue;
+      if (context_only)
+      {
+         if (i == frames / 2)
+         {
+            if (hw.context_destroy)
+               hw.context_destroy();
+            hw.context_reset();
+         }
+         continue;
+      }
       if (i == frames / 6)
       {
          size_t size = p_retro_serialize_size();
@@ -368,8 +402,9 @@ int main(int argc, char **argv)
    p_retro_unload_game();
    p_retro_deinit();
    eglTerminate(dpy);
-   printf("@@ frames=%d video=%lu audio_frames=%lu video_digest=%016llx lit=%lu gl_errors=%lu\n",
-         ran, frames_video, audio_frames, (unsigned long long)video_digest, lit_frames, gl_errors);
+   printf("@@ frames=%d video=%lu audio_frames=%lu video_digest=%016llx lit=%lu gl_errors=%lu debug_groups=%lu\n",
+         ran, frames_video, audio_frames, (unsigned long long)video_digest, lit_frames, gl_errors,
+         __atomic_load_n(&debug_groups, __ATOMIC_RELAXED));
    dlclose(h);
    return ran == frames && gl_errors == 0 ? 0 : 1;
 }

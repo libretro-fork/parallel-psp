@@ -19,6 +19,7 @@
 #include <cmath>
 #include <set>
 #include <cstdint>
+#include <cstring>
 #include "Common/GPU/thin3d.h"
 
 #include "Common/System/Display.h"
@@ -258,6 +259,7 @@ void PresentationCommon::CreateDeviceObjects() {
 
 	// TODO: Could probably just switch to DrawUP, it's supported well by all backends now.
 	vdata_ = draw_->CreateBuffer(sizeof(Vertex) * 4, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
+	vdataValid_ = false;
 
 	samplerNearest_ = draw_->CreateSamplerState({ TextureFilter::NEAREST, TextureFilter::NEAREST, TextureFilter::NEAREST, 0.0f, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE });
 	samplerLinear_ = draw_->CreateSamplerState({ TextureFilter::LINEAR, TextureFilter::LINEAR, TextureFilter::LINEAR, 0.0f, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE });
@@ -280,6 +282,7 @@ void PresentationCommon::DestroyDeviceObjects() {
 	DoRelease(samplerNearest_);
 	DoRelease(samplerLinear_);
 	DoRelease(vdata_);
+	vdataValid_ = false;
 	DoRelease(srcTexture_);
 	DoRelease(srcFramebuffer_);
 
@@ -417,7 +420,14 @@ void PresentationCommon::PrepareOutput(const DisplayLayoutConfig &config, Output
 		}
 	}
 
-	draw_->UpdateBuffer(vdata_, (const uint8_t *)verts, 0, sizeof(verts), Draw::UPDATE_DISCARD);
+	// Every backend keeps a buffer's contents after an update, so the same
+	// layout as last time needs no copy or upload.
+	static_assert(sizeof(verts) == sizeof(vdataContents_), "vdataContents_ holds the output quad");
+	if (!vdataValid_ || memcmp(vdataContents_, verts, sizeof(verts)) != 0) {
+		draw_->UpdateBuffer(vdata_, (const uint8_t *)verts, 0, sizeof(verts), Draw::UPDATE_DISCARD);
+		memcpy(vdataContents_, verts, sizeof(verts));
+		vdataValid_ = true;
+	}
 }
 
 void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {

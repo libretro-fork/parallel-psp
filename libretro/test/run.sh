@@ -36,6 +36,14 @@ save=$(mktemp -d)
 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrgltest" "$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" 300 \
 	|| { echo "FAIL: GL backend run"; exit 1; }
 rm -rf "$save"
+# Savestates every 20 frames: a too-small frontend buffer is refused untouched,
+# and every state round trips.
+save=$(mktemp -d)
+line=$(LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 "$here/lrtest" "$root/libretro/ppsspp_libretro.so" \
+	"$data/gl/15826 hot pixel ULUS10298.ppdmp" 120 20 | grep -E '^(@@|FAIL)')
+rm -rf "$save"
+echo "states $line"
+case "$line" in *FAIL*) echo "FAIL: savestates"; exit 1;; *frames=120*) ;; *) echo "FAIL: savestate run stopped early"; exit 1;; esac
 
 # The Vulkan device, negotiated as RetroArch does (v2: made through the
 # frontend's vkCreateDevice wrapper, which adds what the frontend needs, e.g.

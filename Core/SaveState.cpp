@@ -174,7 +174,10 @@ static retro_atomic_int_t g_screenshotFailures{ 0 };
 
 		// Memory is a bit tricky when jit is enabled, since there's emuhacks in it.
 		// These must be saved before copying out memory and restored after.
-		auto savedReplacements = SaveAndClearReplacements();
+		// Measuring reads no RAM.
+		std::map<u32, u32> savedReplacements;
+		if (p.mode != p.MODE_MEASURE)
+			savedReplacements = SaveAndClearReplacements();
 		if (MIPSComp::jit && (p.mode == p.MODE_WRITE || p.mode == p.MODE_VERIFY)) {
 			if (MIPSComp::jit) {
 				std::vector<u32> savedBlocks;

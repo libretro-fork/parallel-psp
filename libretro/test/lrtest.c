@@ -194,6 +194,8 @@ int main(int argc, char **argv)
    struct retro_game_info info;
    void *h;
    int max_frames, i;
+   int state_errors = 0;
+   const char *state_dir = getenv("LRTEST_STATE_DIR");
    int state_every = 0;
    int reset_at = -1;
    int frames_after_exit = 5;
@@ -276,8 +278,34 @@ int main(int argc, char **argv)
       {
          size_t size = p_retro_serialize_size();
          void *buf = malloc(size);
+         /* A buffer too small for the state is refused and left untouched. */
+         unsigned char small[4096 + 64];
+         size_t k;
+         memset(small, 0xA5, sizeof(small));
+         if (p_retro_serialize(small, 4096))
+            state_errors++;
+         for (k = 0; k < sizeof(small); k++)
+            if (small[k] != 0xA5)
+               break;
+         if (k != sizeof(small))
+            state_errors++;
          if (buf && p_retro_serialize(buf, size))
+         {
+            if (state_dir)
+            {
+               char path[4096];
+               FILE *f;
+               snprintf(path, sizeof(path), "%s/state%05d.bin", state_dir, i);
+               if ((f = fopen(path, "wb")))
+               {
+                  fwrite(buf, 1, size, f);
+                  fclose(f);
+               }
+            }
             p_retro_unserialize(buf, size);
+         }
+         else
+            state_errors++;
          free(buf);
       }
       if (i == reset_at)
@@ -289,6 +317,8 @@ int main(int argc, char **argv)
    printf("@@ frames=%d video=%lu dupe=%lu audio_frames=%lu video_digest=%016llx audio_digest=%016llx exit=%d\n",
          ran, frames_video, frames_dupe, audio_frames,
          (unsigned long long)video_digest, (unsigned long long)audio_digest, exit_seen ? 1 : 0);
+   if (state_errors)
+      printf("FAIL: %d savestate errors\n", state_errors);
    if (log_out)
       fclose(log_out);
    if (audio_out)
@@ -296,5 +326,5 @@ int main(int argc, char **argv)
    if (video_out)
       fclose(video_out);
    dlclose(h);
-   return 0;
+   return state_errors ? 4 : 0;
 }

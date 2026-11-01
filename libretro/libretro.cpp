@@ -1616,15 +1616,13 @@ bool retro_serialize(void *data, size_t size) {
    ctx->LockGPU();
    // The buffer was sized by an earlier retro_serialize_size(); the state
    // may have grown since, so never write past 'size'.
-   size_t measuredSize = CChunkFileReader::MeasurePtr(state);
-   if (measuredSize <= size) {
-      u8 *buffer = (u8 *)data;
-      auto err = CChunkFileReader::MeasureAndSavePtr(state, &buffer, &measuredSize);
-      retVal = err == CChunkFileReader::ERROR_NONE;
-   } else {
+   u8 *buffer = (u8 *)data;
+   size_t measuredSize = size;
+   auto err = CChunkFileReader::MeasureAndSavePtr(state, &buffer, &measuredSize);
+   retVal = err == CChunkFileReader::ERROR_NONE;
+   if (err == CChunkFileReader::ERROR_BAD_ALLOC)
       ERROR_LOG(Log::SaveState, "Savestate (%d bytes) does not fit in frontend buffer (%d bytes)",
                 (int)measuredSize, (int)size);
-   }
    ctx->UnlockGPU();
 
    if (useEmuThread)

@@ -22,7 +22,6 @@
 #undef new
 #endif
 
-#include "ext/vma/vk_mem_alloc.h"
 
 
 // Change this to 1, 2, and 3 to fake failures in a few places, so that
@@ -411,7 +410,7 @@ void VulkanContext::DestroyInstance() {
 void VulkanContext::BeginFrame() {
 	FrameData *frame = &frame_[curFrame_];
 	// Process pending deletes.
-	frame->deleteList.PerformDeletes(this, allocator_);
+	frame->deleteList.PerformDeletes(this, &heap_);
 }
 
 void VulkanContext::EndFrame() {
@@ -677,8 +676,7 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		deviceInfo_.canBlitToPreferredDepthStencilFormat = true;
 	}
 
-	// This is as good a place as any to do this. Though, we don't use this much anymore after we added
-	// support for VMA.
+	// The memory heap (VulkanHeap) chooses its memory types from these.
 	vkGetPhysicalDeviceMemoryProperties(physical_devices_[physical_device_], &memory_properties_);
 	DEBUG_LOG(Log::G3D, "Memory Types (%d):", memory_properties_.memoryTypeCount);
 	for (int i = 0; i < (int)memory_properties_.memoryTypeCount; i++) {
@@ -853,7 +851,7 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		init_error_ = "Unable to create Vulkan device";
 		ERROR_LOG(Log::G3D, "%s", init_error_.c_str());
 		// Don't fall through - there's nothing below that makes sense without a device, and creating the
-		// VMA allocator on a null one asserts. The caller falls back to another backend on failure.
+		// memory heap on a null one asserts. The caller falls back to another backend on failure.
 		return res;
 	}
 
@@ -864,17 +862,29 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 	// Since we successfully created a device (however we got here, might be interesting in debug), we force the choice to be visible in the menu.
 	VulkanSetAvailable(true);
 
-	VmaAllocatorCreateInfo allocatorInfo = {};
-	allocatorInfo.vulkanApiVersion = std::min(vulkanDeviceApiVersion_, vulkanInstanceApiVersion_);
-	allocatorInfo.physicalDevice = physical_devices_[physical_device_];
-	allocatorInfo.device = device_;
-	allocatorInfo.instance = instance_;
 	// Only the thread that records frames allocates and frees (the render thread hands readbacks to
-	// it, deletes are queued), so the allocator needs no internal locking.
-	allocatorInfo.flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
-	VkResult result = vmaCreateAllocator(&allocatorInfo, &allocator_);
-	_assert_(result == VK_SUCCESS);
-	_assert_(allocator_ != VK_NULL_HANDLE);
+	// it, deletes are queued), so the heap takes no locks.
+	vk_heap_fns_t heapFns{};
+	heapFns.allocate_memory = vkAllocateMemory;
+	heapFns.free_memory = vkFreeMemory;
+	heapFns.map_memory = vkMapMemory;
+	heapFns.unmap_memory = vkUnmapMemory;
+	heapFns.invalidate_ranges = vkInvalidateMappedMemoryRanges;
+	heapFns.create_buffer = vkCreateBuffer;
+	heapFns.destroy_buffer = vkDestroyBuffer;
+	heapFns.create_image = vkCreateImage;
+	heapFns.destroy_image = vkDestroyImage;
+	heapFns.buffer_requirements = vkGetBufferMemoryRequirements;
+	heapFns.image_requirements = vkGetImageMemoryRequirements;
+	if (extensionsLookup_.KHR_dedicated_allocation) {
+		heapFns.buffer_requirements2 = vkGetBufferMemoryRequirements2;
+		heapFns.image_requirements2 = vkGetImageMemoryRequirements2;
+	}
+	heapFns.bind_buffer = vkBindBufferMemory;
+	heapFns.bind_image = vkBindImageMemory;
+	heapReady_ = vk_heap_init(&heap_, device_, &memory_properties_,
+		physicalDeviceProperties_[physical_device_].properties.limits.nonCoherentAtomSize, &heapFns, 0) != 0;
+	_assert_(heapReady_);
 
 	// Examine the physical device to figure out super rough performance grade.
 	// Basically all we want to do is to identify low performance mobile devices
@@ -1458,9 +1468,9 @@ VkFence VulkanContext::CreateFence(bool presignalled) {
 
 void VulkanContext::PerformPendingDeletes() {
 	for (int i = 0; i < ARRAY_SIZE(frame_); i++) {
-		frame_[i].deleteList.PerformDeletes(this, allocator_);
+		frame_[i].deleteList.PerformDeletes(this, &heap_);
 	}
-	Delete().PerformDeletes(this, allocator_);
+	Delete().PerformDeletes(this, &heap_);
 }
 
 void VulkanContext::DestroyDevice() {
@@ -1474,8 +1484,10 @@ void VulkanContext::DestroyDevice() {
 	INFO_LOG(Log::G3D, "VulkanContext::DestroyDevice (performing deletes)");
 	PerformPendingDeletes();
 
-	vmaDestroyAllocator(allocator_);
-	allocator_ = VK_NULL_HANDLE;
+	if (heapReady_) {
+		vk_heap_shutdown(&heap_);
+		heapReady_ = false;
+	}
 
 	if (ownsDevice_) {
 		vkDestroyDevice(device_, nullptr);
@@ -1839,7 +1851,7 @@ void VulkanDeleteList::Take(VulkanDeleteList &del) {
 	del.callbacks_.clear();
 }
 
-void VulkanDeleteList::PerformDeletes(VulkanContext *vulkan, VmaAllocator allocator) {
+void VulkanDeleteList::PerformDeletes(VulkanContext *vulkan, vk_heap_t *heap) {
 	// Drain into a local list before destroying anything - a callback is allowed to queue more deletes
 	// (~VKFramebuffer does, via ~VKRFramebuffer), and we mustn't append to a vector we're iterating.
 	// Anything queued back onto this list gets picked up by the next lap, so keep going until a lap
@@ -1851,7 +1863,7 @@ void VulkanDeleteList::PerformDeletes(VulkanContext *vulkan, VmaAllocator alloca
 	for (;;) {
 		VulkanDeleteList taken;
 		taken.Take(*this);
-		int count = taken.PerformDeletesInternal(vulkan, allocator);
+		int count = taken.PerformDeletesInternal(vulkan, heap);
 		if (!count) {
 			break;
 		}
@@ -1861,7 +1873,7 @@ void VulkanDeleteList::PerformDeletes(VulkanContext *vulkan, VmaAllocator alloca
 }
 
 // See the note on Take() - every vector in the class must be handled here too, or it leaks.
-int VulkanDeleteList::PerformDeletesInternal(VulkanContext *vulkan, VmaAllocator allocator) {
+int VulkanDeleteList::PerformDeletesInternal(VulkanContext *vulkan, vk_heap_t *heap) {
 	int deleteCount = 0;
 
 	for (auto &callback : callbacks_) {
@@ -1892,7 +1904,7 @@ int VulkanDeleteList::PerformDeletesInternal(VulkanContext *vulkan, VmaAllocator
 	}
 	buffers_.clear();
 	for (auto &buf : buffersWithAllocs_) {
-		vmaDestroyBuffer(allocator, buf.buffer, buf.alloc);
+		vk_heap_destroy_buffer(heap, buf.buffer, &buf.alloc);
 		deleteCount++;
 	}
 	buffersWithAllocs_.clear();
@@ -1902,7 +1914,7 @@ int VulkanDeleteList::PerformDeletesInternal(VulkanContext *vulkan, VmaAllocator
 	}
 	bufferViews_.clear();
 	for (auto &imageWithAlloc : imagesWithAllocs_) {
-		vmaDestroyImage(allocator, imageWithAlloc.image, imageWithAlloc.alloc);
+		vk_heap_destroy_image(heap, imageWithAlloc.image, &imageWithAlloc.alloc);
 		deleteCount++;
 	}
 	imagesWithAllocs_.clear();

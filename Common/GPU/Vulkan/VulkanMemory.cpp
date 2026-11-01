@@ -63,19 +63,12 @@ VulkanPushPool::Block VulkanPushPool::CreateBlock(size_t size) {
 	b.size = size;
 	b.usage = usage_;
 	b.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	VmaAllocationCreateInfo allocCreateInfo{};
-
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-	allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;  // required to not get memory where we have to manually flush.
-	VmaAllocationInfo allocInfo{};
-	
-	VkResult result = vmaCreateBuffer(vulkan_->Allocator(), &b, &allocCreateInfo, &block.buffer, &block.allocation, &allocInfo);
+	// Coherent, so writes need no flush; mapped for the block's lifetime.
+	VkResult result = vk_heap_create_buffer(vulkan_->Heap(), &b, VK_HEAP_UPLOAD, &block.buffer, &block.allocation);
 
 	_assert_msg_(result == VK_SUCCESS, "VulkanPushPool: Failed to create buffer (result = %s, size = %d)", VulkanResultToString(result), (int)size);
 
-	result = vmaMapMemory(vulkan_->Allocator(), block.allocation, (void **)(&block.writePtr));
-
-	_assert_msg_(result == VK_SUCCESS, "VulkanPushPool: Failed to map memory (result = %s, size = %d)", VulkanResultToString(result), (int)size);
+	block.writePtr = (uint8_t *)block.allocation.mapped;
 	_assert_msg_(block.writePtr != nullptr, "VulkanPushPool: Failed to map memory on block of size %d", (int)block.size);
 	return block;
 }
@@ -83,7 +76,6 @@ VulkanPushPool::Block VulkanPushPool::CreateBlock(size_t size) {
 VulkanPushPool::Block::~Block() {}
 
 void VulkanPushPool::Block::Destroy(VulkanContext *vulkan) {
-	vmaUnmapMemory(vulkan->Allocator(), allocation);
 	vulkan->Delete().QueueDeleteBufferAllocation(buffer, allocation);
 }
 
@@ -194,13 +186,8 @@ void VulkanBuffer::Create(VulkanContext *vulkan, const char *name, VkDeviceSize 
 	b.size = size;
 	b.usage = usage;
 	b.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	VmaAllocationCreateInfo allocCreateInfo{};
-
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;  // required to not get memory where we have to manually flush.
-	VmaAllocationInfo allocInfo{};
-
-	VkResult result = vmaCreateBuffer(vulkan->Allocator(), &b, &allocCreateInfo, &buffer_, &allocation_, &allocInfo);
+	// Filled by transfers on the GPU, never mapped.
+	VkResult result = vk_heap_create_buffer(vulkan->Heap(), &b, VK_HEAP_DEVICE, &buffer_, &allocation_);
 	_dbg_assert_(result == VK_SUCCESS);
 	vulkan->SetDebugName(buffer_, VK_OBJECT_TYPE_BUFFER, name);
 }

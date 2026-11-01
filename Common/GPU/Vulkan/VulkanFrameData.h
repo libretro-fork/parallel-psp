@@ -57,7 +57,7 @@ struct ReadbackKey {
 
 struct CachedReadback {
 	VkBuffer buffer;
-	VmaAllocation allocation;
+	vk_heap_alloc_t allocation;
 	VkDeviceSize bufferSize;
 	bool isCoherent;
 	// frameId of the frame that created it; holds no data until that frame comes round again.

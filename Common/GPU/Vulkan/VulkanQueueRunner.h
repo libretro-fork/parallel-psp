@@ -334,7 +334,7 @@ private:
 	struct DepthBufferInfo {
 		VkFormat format = VK_FORMAT_UNDEFINED;
 		VkImage image = VK_NULL_HANDLE;
-		VmaAllocation alloc = VK_NULL_HANDLE;
+		vk_heap_alloc_t alloc{};
 		VkImageView view = VK_NULL_HANDLE;
 	};
 	DepthBufferInfo depth_;

@@ -28,8 +28,6 @@
 #include "Common/Thread/MpscQueue.h"
 #include "Common/Thread/ParkingLot.h"
 
-// Forward declaration
-VK_DEFINE_HANDLE(VmaAllocation);
 
 struct BoundingRect {
 	int x1;

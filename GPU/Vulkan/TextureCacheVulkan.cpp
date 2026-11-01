@@ -613,8 +613,7 @@ static const VkFilter MagFiltVK[2] = {
 
 void TextureCacheVulkan::StartFrame() {
 	TextureCacheCommon::StartFrame();
-	// TODO: For low memory detection, maybe use some indication from VMA.
-	// Maybe see https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/staying_within_budget.html#staying_within_budget_querying_for_budget .
+	// TODO: For low memory detection, VK_EXT_memory_budget could be read alongside the heap's bytes_reserved.
 	computeShaderManager_.BeginFrame();
 }
 

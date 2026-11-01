@@ -51,7 +51,7 @@ void VKRImage::Delete(VulkanContext *vulkan) {
 	}
 
 	if (image) {
-		_dbg_assert_(alloc);
+		_dbg_assert_(alloc.memory != VK_NULL_HANDLE);
 		vulkan->Delete().QueueDeleteImageAllocation(image, alloc);
 	}
 }
@@ -187,11 +187,7 @@ void VKRFramebuffer::CreateImage(VulkanContext *vulkan, VulkanBarrierBatch *barr
 		ici.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 	}
 
-	VmaAllocationCreateInfo allocCreateInfo{};
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	VmaAllocationInfo allocInfo{};
-
-	VkResult res = vmaCreateImage(vulkan->Allocator(), &ici, &allocCreateInfo, &img.image, &img.alloc, &allocInfo);
+	VkResult res = vk_heap_create_image(vulkan->Heap(), &ici, VK_HEAP_DEVICE, &img.image, &img.alloc);
 	_dbg_assert_(res == VK_SUCCESS);
 
 	vulkan->SetDebugName(img.image, VK_OBJECT_TYPE_IMAGE, tag);

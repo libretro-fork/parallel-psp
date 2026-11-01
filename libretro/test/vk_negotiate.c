@@ -25,7 +25,11 @@
  * VK_LAYER_KHRONOS_validation is enabled when installed, and any error it
  * reports fails the run. VKN_DIR is the system/save directory (default
  * "."). Exits 0 when the device was made as described, non-zero otherwise.
- * No frame is run: the core's teardown is not part of the test. */
+ *
+ * VKN_FRAMES=N then goes on as a frontend: serves the HW render interface,
+ * calls context_reset and runs N frames, reading back each picture the
+ * core hands over and printing a digest of them ("vk_negotiate: frames=N
+ * shown=S digest=D"). The core's teardown is not part of the test. */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,9 +45,23 @@
 #define dlopen(path, flags) ((void*)LoadLibraryA(path))
 #define dlsym(h, name) ((void*)GetProcAddress((HMODULE)(h), name))
 #define VKN_LIBVULKAN "vulkan-1.dll"
+static CRITICAL_SECTION queue_lock;
+#define QUEUE_LOCK_INIT() InitializeCriticalSection(&queue_lock)
+#define QUEUE_LOCK() EnterCriticalSection(&queue_lock)
+#define QUEUE_UNLOCK() LeaveCriticalSection(&queue_lock)
+static void boot_poll_sleep(void) { Sleep(1); }
 #else
 #include <dlfcn.h>
+#include <pthread.h>
+#include <unistd.h>
 #define VKN_LIBVULKAN "libvulkan.so.1"
+/* The frontend's queue mutex, as RetroArch has: the core's render thread
+ * and this host's readback share the queue. */
+static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+#define QUEUE_LOCK_INIT()
+#define QUEUE_LOCK() pthread_mutex_lock(&queue_lock)
+#define QUEUE_UNLOCK() pthread_mutex_unlock(&queue_lock)
+static void boot_poll_sleep(void) { usleep(1000); }
 #endif
 
 static char *opt_keys[64], *opt_vals[64];
@@ -64,6 +82,32 @@ static PFN_vkEnumeratePhysicalDevices p_vkEnumeratePhysicalDevices;
 static PFN_vkEnumerateDeviceExtensionProperties p_vkEnumerateDeviceExtensionProperties;
 static PFN_vkCreateDevice p_vkCreateDevice;
 static PFN_vkGetDeviceProcAddr p_vkGetDeviceProcAddr;
+
+/* VKN_FRAMES: the frontend side of the HW render interface. */
+static struct retro_hw_render_interface_vulkan vk_if;
+static struct retro_vulkan_context vk_ctx;
+static struct retro_vulkan_image vk_image;
+static int vk_have_image;
+static uint32_t vk_sync;
+static VkCommandBuffer vk_pending[16];
+static uint32_t vk_pending_count;
+static VkCommandPool vk_pool;
+static VkCommandBuffer vk_copy_cmd;
+static VkBuffer vk_buf;
+static VkDeviceMemory vk_mem;
+static VkDeviceSize vk_buf_size;
+static void *vk_map;
+static VkFence vk_fence;
+static VkPhysicalDeviceMemoryProperties vk_mem_props;
+static unsigned long frames_shown;
+static uint64_t frames_digest = 1469598103934665603ULL;
+
+#define VKF(name) static PFN_##name p_##name
+VKF(vkQueueSubmit); VKF(vkQueueWaitIdle); VKF(vkCreateCommandPool); VKF(vkAllocateCommandBuffers);
+VKF(vkBeginCommandBuffer); VKF(vkEndCommandBuffer); VKF(vkCmdPipelineBarrier); VKF(vkCmdCopyImageToBuffer);
+VKF(vkCreateBuffer); VKF(vkDestroyBuffer); VKF(vkGetBufferMemoryRequirements); VKF(vkAllocateMemory);
+VKF(vkFreeMemory); VKF(vkBindBufferMemory); VKF(vkMapMemory); VKF(vkCreateFence); VKF(vkWaitForFences);
+VKF(vkResetFences); VKF(vkResetCommandBuffer); VKF(vkGetPhysicalDeviceMemoryProperties);
 
 static void log_cb(enum retro_log_level level, const char *fmt, ...)
 {
@@ -111,6 +155,11 @@ static bool environ_cb(unsigned cmd, void *data)
          var->value = NULL;
          return false;
       }
+      case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE:
+         if (!vk_if.device)
+            return false;
+         *(const struct retro_hw_render_interface **)data = (const struct retro_hw_render_interface *)&vk_if;
+         return true;
       case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER:
          *(unsigned*)data = RETRO_HW_CONTEXT_VULKAN;
          return true;
@@ -152,7 +201,157 @@ static bool environ_cb(unsigned cmd, void *data)
    }
 }
 
-static void video_cb(const void *d, unsigned w, unsigned h, size_t p) { (void)d; (void)w; (void)h; (void)p; }
+static void fnv(uint64_t *h, const void *data, size_t size)
+{
+   const unsigned char *p = (const unsigned char *)data;
+   size_t i;
+   for (i = 0; i < size; i++)
+      *h = (*h ^ p[i]) * 1099511628211ULL;
+}
+
+static void vk_set_image(void *handle, const struct retro_vulkan_image *image, uint32_t num_semaphores,
+      const VkSemaphore *semaphores, uint32_t src_queue_family)
+{
+   (void)handle; (void)num_semaphores; (void)semaphores; (void)src_queue_family;
+   vk_have_image = image != NULL;
+   if (image)
+      vk_image = *image;
+}
+static uint32_t vk_get_sync_index(void *handle) { (void)handle; return vk_sync; }
+static uint32_t vk_get_sync_index_mask(void *handle) { (void)handle; return 3; }
+static void vk_set_command_buffers(void *handle, uint32_t num, const VkCommandBuffer *cmd)
+{
+   uint32_t i;
+   (void)handle;
+   for (i = 0; i < num && vk_pending_count < 16; i++)
+      vk_pending[vk_pending_count++] = cmd[i];
+}
+static void vk_wait_sync_index(void *handle)
+{
+   (void)handle;
+   QUEUE_LOCK();
+   p_vkQueueWaitIdle(vk_ctx.queue);
+   QUEUE_UNLOCK();
+}
+static void vk_lock_queue(void *handle) { (void)handle; QUEUE_LOCK(); }
+static void vk_unlock_queue(void *handle) { (void)handle; QUEUE_UNLOCK(); }
+static void vk_set_signal_semaphore(void *handle, VkSemaphore semaphore) { (void)handle; (void)semaphore; }
+
+/* A host-visible buffer of at least size bytes for the readback. */
+static int vk_readback_buffer(VkDeviceSize size)
+{
+   VkBufferCreateInfo bi;
+   VkMemoryRequirements req;
+   VkMemoryAllocateInfo mi;
+   const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+   uint32_t t;
+   if (size <= vk_buf_size)
+      return 1;
+   if (vk_buf)
+   {
+      p_vkDestroyBuffer(vk_ctx.device, vk_buf, NULL);
+      p_vkFreeMemory(vk_ctx.device, vk_mem, NULL);
+      vk_buf = VK_NULL_HANDLE;
+      vk_buf_size = 0;
+   }
+   memset(&bi, 0, sizeof(bi));
+   bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+   bi.size = size;
+   bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+   if (p_vkCreateBuffer(vk_ctx.device, &bi, NULL, &vk_buf) != VK_SUCCESS)
+      return 0;
+   p_vkGetBufferMemoryRequirements(vk_ctx.device, vk_buf, &req);
+   for (t = 0; t < vk_mem_props.memoryTypeCount; t++)
+      if ((req.memoryTypeBits >> t & 1) && (vk_mem_props.memoryTypes[t].propertyFlags & want) == want)
+         break;
+   memset(&mi, 0, sizeof(mi));
+   mi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+   mi.allocationSize = req.size;
+   mi.memoryTypeIndex = t;
+   if (t == vk_mem_props.memoryTypeCount || p_vkAllocateMemory(vk_ctx.device, &mi, NULL, &vk_mem) != VK_SUCCESS)
+      return 0;
+   p_vkBindBufferMemory(vk_ctx.device, vk_buf, vk_mem, 0);
+   if (p_vkMapMemory(vk_ctx.device, vk_mem, 0, VK_WHOLE_SIZE, 0, &vk_map) != VK_SUCCESS)
+      return 0;
+   vk_buf_size = size;
+   return 1;
+}
+
+/* The picture the core set, read back and added to the digest. */
+static void vk_picture(unsigned w, unsigned h)
+{
+   VkCommandBufferBeginInfo bi;
+   VkImageMemoryBarrier b;
+   VkBufferImageCopy region;
+   VkSubmitInfo si;
+   unsigned y;
+   QUEUE_LOCK();
+   if (vk_pending_count)
+   {
+      memset(&si, 0, sizeof(si));
+      si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      si.commandBufferCount = vk_pending_count;
+      si.pCommandBuffers = vk_pending;
+      p_vkQueueSubmit(vk_ctx.queue, 1, &si, VK_NULL_HANDLE);
+      vk_pending_count = 0;
+   }
+   if (!vk_have_image || !w || !h || !vk_readback_buffer((VkDeviceSize)w * h * 4))
+   {
+      QUEUE_UNLOCK();
+      return;
+   }
+   p_vkResetCommandBuffer(vk_copy_cmd, 0);
+   memset(&bi, 0, sizeof(bi));
+   bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+   p_vkBeginCommandBuffer(vk_copy_cmd, &bi);
+   memset(&b, 0, sizeof(b));
+   b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+   b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+   b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+   b.oldLayout = vk_image.image_layout;
+   b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+   b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+   b.image = vk_image.create_info.image;
+   b.subresourceRange = vk_image.create_info.subresourceRange;
+   p_vkCmdPipelineBarrier(vk_copy_cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+         0, NULL, 0, NULL, 1, &b);
+   memset(&region, 0, sizeof(region));
+   region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+   region.imageSubresource.layerCount = 1;
+   region.imageExtent.width = w;
+   region.imageExtent.height = h;
+   region.imageExtent.depth = 1;
+   p_vkCmdCopyImageToBuffer(vk_copy_cmd, vk_image.create_info.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_buf, 1, &region);
+   b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+   b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+   b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+   b.newLayout = vk_image.image_layout;
+   p_vkCmdPipelineBarrier(vk_copy_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+         0, NULL, 0, NULL, 1, &b);
+   p_vkEndCommandBuffer(vk_copy_cmd);
+   memset(&si, 0, sizeof(si));
+   si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+   si.commandBufferCount = 1;
+   si.pCommandBuffers = &vk_copy_cmd;
+   p_vkResetFences(vk_ctx.device, 1, &vk_fence);
+   p_vkQueueSubmit(vk_ctx.queue, 1, &si, vk_fence);
+   QUEUE_UNLOCK();
+   p_vkWaitForFences(vk_ctx.device, 1, &vk_fence, VK_TRUE, ~(uint64_t)0);
+   fnv(&frames_digest, &vk_image.create_info.format, sizeof(vk_image.create_info.format));
+   for (y = 0; y < h; y++)
+      fnv(&frames_digest, (const unsigned char *)vk_map + (size_t)y * w * 4, (size_t)w * 4);
+   frames_shown++;
+}
+
+static void video_cb(const void *d, unsigned w, unsigned h, size_t p)
+{
+   (void)p;
+   if (d == RETRO_HW_FRAME_BUFFER_VALID)
+      vk_picture(w, h);
+   /* The next frame renders into the next image. */
+   vk_sync = (vk_sync + 1) & 1;
+}
 static void audio_cb(int16_t l, int16_t r) { (void)l; (void)r; }
 static size_t audio_batch_cb(const int16_t *d, size_t f) { (void)d; return f; }
 static void input_poll_cb(void) { }
@@ -463,5 +662,87 @@ int main(int argc, char **argv)
    printf("vk_negotiate: frontend v%u, device made %s%s\n", offer >= 2 ? 2u : 1u,
          wrapper_calls ? "through the frontend (create_device2)" : "by the core (create_device)",
          wrapper_added ? ", with the frontend's extension" : "");
+   if (getenv("VKN_FRAMES"))
+   {
+      typedef void (*run_t)(void);
+      run_t run = (run_t)dlsym(core, "retro_run");
+      const int frames = atoi(getenv("VKN_FRAMES"));
+      VkCommandPoolCreateInfo pci;
+      VkCommandBufferAllocateInfo ai;
+      VkFenceCreateInfo fi;
+      PFN_vkGetPhysicalDeviceMemoryProperties get_props = (PFN_vkGetPhysicalDeviceMemoryProperties)
+         gipa(instance, "vkGetPhysicalDeviceMemoryProperties");
+      int f;
+
+      QUEUE_LOCK_INIT();
+      vk_ctx = ctx;
+#define VKD(name) p_##name = (PFN_##name)p_vkGetDeviceProcAddr(ctx.device, #name)
+      VKD(vkQueueSubmit); VKD(vkQueueWaitIdle); VKD(vkCreateCommandPool); VKD(vkAllocateCommandBuffers);
+      VKD(vkBeginCommandBuffer); VKD(vkEndCommandBuffer); VKD(vkCmdPipelineBarrier); VKD(vkCmdCopyImageToBuffer);
+      VKD(vkCreateBuffer); VKD(vkDestroyBuffer); VKD(vkGetBufferMemoryRequirements); VKD(vkAllocateMemory);
+      VKD(vkFreeMemory); VKD(vkBindBufferMemory); VKD(vkMapMemory); VKD(vkCreateFence); VKD(vkWaitForFences);
+      VKD(vkResetFences); VKD(vkResetCommandBuffer);
+#undef VKD
+      get_props(gpu, &vk_mem_props);
+      memset(&pci, 0, sizeof(pci));
+      pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+      pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+      pci.queueFamilyIndex = ctx.queue_family_index;
+      p_vkCreateCommandPool(ctx.device, &pci, NULL, &vk_pool);
+      memset(&ai, 0, sizeof(ai));
+      ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+      ai.commandPool = vk_pool;
+      ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      ai.commandBufferCount = 1;
+      p_vkAllocateCommandBuffers(ctx.device, &ai, &vk_copy_cmd);
+      memset(&fi, 0, sizeof(fi));
+      fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+      p_vkCreateFence(ctx.device, &fi, NULL, &vk_fence);
+
+      vk_if.interface_type = RETRO_HW_RENDER_INTERFACE_VULKAN;
+      vk_if.interface_version = RETRO_HW_RENDER_INTERFACE_VULKAN_VERSION;
+      vk_if.handle = &vk_if;
+      vk_if.instance = instance;
+      vk_if.gpu = gpu;
+      vk_if.device = ctx.device;
+      vk_if.get_device_proc_addr = p_vkGetDeviceProcAddr;
+      vk_if.get_instance_proc_addr = gipa;
+      vk_if.queue = ctx.queue;
+      vk_if.queue_index = ctx.queue_family_index;
+      vk_if.set_image = vk_set_image;
+      vk_if.get_sync_index = vk_get_sync_index;
+      vk_if.get_sync_index_mask = vk_get_sync_index_mask;
+      vk_if.set_command_buffers = vk_set_command_buffers;
+      vk_if.wait_sync_index = vk_wait_sync_index;
+      vk_if.lock_queue = vk_lock_queue;
+      vk_if.unlock_queue = vk_unlock_queue;
+      vk_if.set_signal_semaphore = vk_set_signal_semaphore;
+      {
+         /* Asked before context_reset, as a frontend does: the core sizes
+          * its output from it. */
+         typedef void (*av_info_t)(struct retro_system_av_info *);
+         av_info_t av_info = (av_info_t)dlsym(core, "retro_get_system_av_info");
+         struct retro_system_av_info av;
+         memset(&av, 0, sizeof(av));
+         if (av_info)
+            av_info(&av);
+      }
+      if (hw.context_reset)
+         hw.context_reset();
+      /* Boot runs return without a picture until the core is up: those do
+       * not count, for as long as a slow machine takes (up to a minute). */
+      for (f = 0; f < 60000 && !frames_shown; f++)
+      {
+         run();
+         if (!frames_shown)
+            boot_poll_sleep();
+      }
+      for (f = 1; f < frames; f++)
+         run();
+      if (validation_errors)
+         return finish(1);
+      printf("vk_negotiate: frames=%d shown=%lu digest=%016llx\n", frames, frames_shown,
+            (unsigned long long)frames_digest);
+   }
    return finish(0);
 }

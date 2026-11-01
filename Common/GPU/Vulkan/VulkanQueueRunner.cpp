@@ -128,12 +128,7 @@ bool VulkanQueueRunner::InitDepthStencilBuffer(VkCommandBuffer cmd, VulkanBarrie
 
 	depth_.format = depth_format;
 
-	VmaAllocationCreateInfo allocCreateInfo{};
-	VmaAllocationInfo allocInfo{};
-
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-	VkResult res = vmaCreateImage(vulkan_->Allocator(), &image_info, &allocCreateInfo, &depth_.image, &depth_.alloc, &allocInfo);
+	VkResult res = vk_heap_create_image(vulkan_->Heap(), &image_info, VK_HEAP_DEVICE, &depth_.image, &depth_.alloc);
 	_dbg_assert_(res == VK_SUCCESS);
 	if (res != VK_SUCCESS)
 		return false;
@@ -182,7 +177,7 @@ void VulkanQueueRunner::DestroyBackBuffers() {
 		vulkan_->Delete().QueueDeleteImageView(depth_.view);
 	}
 	if (depth_.image) {
-		_dbg_assert_(depth_.alloc);
+		_dbg_assert_(depth_.alloc.memory != VK_NULL_HANDLE);
 		vulkan_->Delete().QueueDeleteImageAllocation(depth_.image, depth_.alloc);
 	}
 	depth_ = {};
@@ -1703,15 +1698,9 @@ void VulkanQueueRunner::ResizeReadbackBuffer(CachedReadback *readback, VkDeviceS
 	buf.size = readback->bufferSize;
 	buf.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-	VmaAllocationCreateInfo allocCreateInfo{};
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
-	VmaAllocationInfo allocInfo{};
-
-	VkResult res = vmaCreateBuffer(vulkan_->Allocator(), &buf, &allocCreateInfo, &readback->buffer, &readback->allocation, &allocInfo);
+	VkResult res = vk_heap_create_buffer(vulkan_->Heap(), &buf, VK_HEAP_READBACK, &readback->buffer, &readback->allocation);
 	_assert_(res == VK_SUCCESS);
-
-	const VkMemoryType &memoryType = vulkan_->GetMemoryProperties().memoryTypes[allocInfo.memoryType];
-	readback->isCoherent = (memoryType.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+	readback->isCoherent = vk_heap_is_coherent(vulkan_->Heap(), &readback->allocation) != 0;
 }
 
 CachedReadback *VulkanQueueRunner::PrepareReadback(FrameData &frameData, const ReadbackKey &key, bool delayed) {
@@ -1829,18 +1818,14 @@ bool VulkanQueueRunner::CopyReadbackBuffer(FrameData &frameData, CachedReadback 
 	if (!readback->buffer)
 		return false;  // Didn't find anything in cache, or something has gone really wrong.
 
-	// Read back to the requested address in ram from buffer.
-	void *mappedData;
+	// Read back to the requested address in ram from buffer, mapped for its lifetime.
+	const void *mappedData = readback->allocation.mapped;
 	const size_t srcPixelSize = DataFormatSizeInBytes(srcFormat);
-	VkResult res = vmaMapMemory(vulkan_->Allocator(), readback->allocation, &mappedData);
-
-	if (res != VK_SUCCESS) {
-		ERROR_LOG(Log::G3D, "CopyReadbackBuffer: vkMapMemory failed! result=%d", (int)res);
+	if (!mappedData)
 		return false;
-	}
 
 	if (!readback->isCoherent) {
-		vmaInvalidateAllocation(vulkan_->Allocator(), readback->allocation, 0, width * height * srcPixelSize);
+		vk_heap_invalidate(vulkan_->Heap(), &readback->allocation, 0, (VkDeviceSize)width * height * srcPixelSize);
 	}
 
 	// TODO: Perform these conversions in a compute shader on the GPU.
@@ -1867,7 +1852,6 @@ bool VulkanQueueRunner::CopyReadbackBuffer(FrameData &frameData, CachedReadback 
 		_assert_msg_(false, "CopyReadbackBuffer: Unknown src format %d", (int)srcFormat);
 	}
 
-	vmaUnmapMemory(vulkan_->Allocator(), readback->allocation);
 	return true;
 }
 

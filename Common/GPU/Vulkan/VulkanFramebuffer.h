@@ -42,7 +42,7 @@ struct VKRImage {
 	// If there's only one layer, layerViews[0] only is initialized.
 	VkImageView texLayerViews[2]{};
 
-	VmaAllocation alloc;
+	vk_heap_alloc_t alloc;
 	VkFormat format;
 	VkSampleCountFlagBits sampleCount;
 

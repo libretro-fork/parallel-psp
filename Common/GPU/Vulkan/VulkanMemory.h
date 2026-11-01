@@ -9,8 +9,6 @@
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/GPUBackendCommon.h"
 
-// Forward declaration
-VK_DEFINE_HANDLE(VmaAllocation);
 
 // VulkanMemory
 //
@@ -73,7 +71,7 @@ private:
 	struct Block {
 		~Block();
 		VkBuffer buffer;
-		VmaAllocation allocation;
+		vk_heap_alloc_t allocation;
 
 		VkDeviceSize size;
 		VkDeviceSize used;
@@ -111,6 +109,6 @@ public:
 
 private:
 	VkBuffer buffer_ = VK_NULL_HANDLE;
-	VmaAllocation allocation_ = VK_NULL_HANDLE;
+	vk_heap_alloc_t allocation_{};
 	VkDeviceSize size_ = 0;  // convenience
 };

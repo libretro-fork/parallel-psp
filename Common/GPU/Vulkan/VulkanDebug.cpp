@@ -91,8 +91,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugUtilsCallback(
 
 	case -375211665:
 		// VUID-vkAllocateMemory-pAllocateInfo-01713
-		// Can happen when VMA aggressively tries to allocate aperture memory for upload. It gracefully
-		// falls back to regular video memory, so we just ignore this. I'd argue this is a VMA bug, actually.
+		// Can happen when the heap tries the small device-local host-visible window for upload first.
+		// It falls back to the next memory type that will do, so this is ignored.
 		return false;
 	case 657182421:
 		// Extended validation (ARM best practices)

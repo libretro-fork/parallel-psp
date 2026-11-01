@@ -16,10 +16,11 @@
 #include "Common/GPU/MiscTypes.h"
 #include "Common/GPU/Vulkan/VulkanLoader.h"
 #include "Common/GPU/Vulkan/VulkanDebug.h"
-#include "Common/GPU/Vulkan/VulkanAlloc.h"
 #include "Common/GPU/Vulkan/VulkanPresentation.h"
 #include "Common/Thread/MpscQueue.h"
 #include "Common/Thread/ParkingLot.h"
+
+using namespace PPSSPP_VK;
 
 enum class VulkanInitFlags : uint32_t {
 	VALIDATE = (1 << 0),
@@ -38,8 +39,7 @@ enum {
 	VULKAN_VENDOR_MESA = 0x00010005, // lavapipe
 };
 
-VK_DEFINE_HANDLE(VmaAllocator);
-VK_DEFINE_HANDLE(VmaAllocation);
+#include "Common/GPU/Vulkan/VulkanHeap.h"
 
 std::string VulkanVendorString(uint32_t vendorId);
 
@@ -72,11 +72,11 @@ typedef std::function<void(VulkanContext *)> DeleteCallback;
 class VulkanDeleteList {
 	struct BufferWithAlloc {
 		VkBuffer buffer;
-		VmaAllocation alloc;
+		vk_heap_alloc_t alloc;
 	};
 	struct ImageWithAlloc {
 		VkImage image;
-		VmaAllocation alloc;
+		vk_heap_alloc_t alloc;
 	};
 
 	enum class Kind : uint8_t {
@@ -87,7 +87,7 @@ class VulkanDeleteList {
 	struct Item {
 		Kind kind;
 		uint64_t handle;
-		VmaAllocation alloc;
+		vk_heap_alloc_t alloc;
 		DeleteCallback callback;
 	};
 
@@ -107,7 +107,7 @@ class VulkanDeleteList {
 	template <class H>
 	void Push(Kind kind, H &handle) {
 		_dbg_assert_(handle != VK_NULL_HANDLE);
-		pending_.Push(Item{ kind, Bits(handle), VK_NULL_HANDLE, nullptr });
+		pending_.Push(Item{ kind, Bits(handle), vk_heap_alloc_t{}, nullptr });
 		handle = VK_NULL_HANDLE;
 	}
 
@@ -128,24 +128,24 @@ public:
 	void QueueDeletePipelineLayout(VkPipelineLayout &pipelineLayout) { Push(Kind::PIPELINE_LAYOUT, pipelineLayout); }
 	void QueueDeleteDescriptorSetLayout(VkDescriptorSetLayout &descSetLayout) { Push(Kind::DESC_SET_LAYOUT, descSetLayout); }
 	void QueueDeleteQueryPool(VkQueryPool &queryPool) { Push(Kind::QUERY_POOL, queryPool); }
-	void QueueCallback(DeleteCallback func) { pending_.Push(Item{ Kind::CALLBACK_FN, 0, VK_NULL_HANDLE, std::move(func) }); }
+	void QueueCallback(DeleteCallback func) { pending_.Push(Item{ Kind::CALLBACK_FN, 0, vk_heap_alloc_t{}, std::move(func) }); }
 
-	void QueueDeleteBufferAllocation(VkBuffer &buffer, VmaAllocation &alloc) {
+	void QueueDeleteBufferAllocation(VkBuffer &buffer, vk_heap_alloc_t &alloc) {
 		_dbg_assert_(buffer != VK_NULL_HANDLE);
 		pending_.Push(Item{ Kind::BUFFER_ALLOC, Bits(buffer), alloc, nullptr });
 		buffer = VK_NULL_HANDLE;
-		alloc = VK_NULL_HANDLE;
+		alloc = vk_heap_alloc_t{};
 	}
-	void QueueDeleteImageAllocation(VkImage &image, VmaAllocation &alloc) {
-		_dbg_assert_(image != VK_NULL_HANDLE && alloc != VK_NULL_HANDLE);
+	void QueueDeleteImageAllocation(VkImage &image, vk_heap_alloc_t &alloc) {
+		_dbg_assert_(image != VK_NULL_HANDLE && alloc.memory != VK_NULL_HANDLE);
 		pending_.Push(Item{ Kind::IMAGE_ALLOC, Bits(image), alloc, nullptr });
 		image = VK_NULL_HANDLE;
-		alloc = VK_NULL_HANDLE;
+		alloc = vk_heap_alloc_t{};
 	}
 
 	// Main thread. Moves everything from del into this list.
 	void Take(VulkanDeleteList &del);
-	void PerformDeletes(VulkanContext *vulkan, VmaAllocator allocator);
+	void PerformDeletes(VulkanContext *vulkan, vk_heap_t *heap);
 
 	int GetLastDeleteCount() const {
 		return deleteCount_;
@@ -153,7 +153,7 @@ public:
 
 private:
 	// Does the actual destruction, on a list that's been drained out of the shared one. Returns the count.
-	int PerformDeletesInternal(VulkanContext *vulkan, VmaAllocator allocator);
+	int PerformDeletesInternal(VulkanContext *vulkan, vk_heap_t *heap);
 	// Main thread. Sorts the queued items into the vectors below.
 	void Collect();
 
@@ -436,8 +436,9 @@ public:
 
 	void GetImageMemoryRequirements(VkImage image, VkMemoryRequirements *mem_reqs, bool *dedicatedAllocation);
 
-	VmaAllocator Allocator() const {
-		return allocator_;
+	// Device memory. Owned by the thread that records frames, like the delete lists' drain.
+	vk_heap_t *Heap() {
+		return &heap_;
 	}
 
 	const std::vector<VkSurfaceFormatKHR> &SurfaceFormats() {
@@ -587,7 +588,8 @@ private:
 
 	std::vector<VkCommandBuffer> cmdQueue_;
 
-	VmaAllocator allocator_ = VK_NULL_HANDLE;
+	vk_heap_t heap_{};
+	bool heapReady_ = false;
 };
 
 enum class GLSLVariant {

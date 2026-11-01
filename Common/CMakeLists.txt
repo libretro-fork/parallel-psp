@@ -203,6 +203,8 @@ add_library(Common STATIC
 	GPU/Vulkan/VulkanLoader.h
 	GPU/Vulkan/VulkanMemory.cpp
 	GPU/Vulkan/VulkanMemory.h
+	GPU/Vulkan/VulkanHeap.c
+	GPU/Vulkan/VulkanHeap.h
 	GPU/Vulkan/thin3d_vulkan.cpp
 	GPU/Vulkan/VulkanRenderManager.cpp
 	GPU/Vulkan/VulkanRenderManager.h
@@ -352,4 +354,4 @@ if(WIN32)
 	target_link_libraries(Common winmm dsound dxguid d2d1 dwrite d3d11 Version dbghelp)
 endif()
 
-target_link_libraries(Common basis_universal vma gason udis86 libretro-common ${RT_LIB} ${ATOMIC_LIB})
+target_link_libraries(Common basis_universal gason udis86 libretro-common ${RT_LIB} ${ATOMIC_LIB})

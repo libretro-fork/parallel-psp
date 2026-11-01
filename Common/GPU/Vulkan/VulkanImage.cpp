@@ -2,7 +2,6 @@
 
 #include "Common/Log.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
-#include "Common/GPU/Vulkan/VulkanAlloc.h"
 #include "Common/GPU/Vulkan/VulkanImage.h"
 #include "Common/GPU/Vulkan/VulkanMemory.h"
 #include "Common/GPU/Vulkan/VulkanBarrier.h"
@@ -20,7 +19,7 @@ void VulkanTexture::Wipe() {
 		vulkan_->Delete().QueueDeleteImageView(view_);
 	}
 	if (image_ != VK_NULL_HANDLE) {
-		_dbg_assert_(allocation_ != VK_NULL_HANDLE);
+		_dbg_assert_(allocation_.memory != VK_NULL_HANDLE);
 		vulkan_->Delete().QueueDeleteImageAllocation(image_, allocation_);
 	}
 }
@@ -84,16 +83,12 @@ bool VulkanTexture::CreateDirect(int w, int h, int depth, int numMips, VkFormat 
 	if (vulkan_->GetInitFlags() & VulkanInitFlags::VALIDATE) {
 		image_create_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	}
-	VmaAllocationCreateInfo allocCreateInfo{};
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	VmaAllocationInfo allocInfo{};
-	VkResult res = vmaCreateImage(vulkan_->Allocator(), &image_create_info, &allocCreateInfo, &image_, &allocation_, &allocInfo);
+	VkResult res = vk_heap_create_image(vulkan_->Heap(), &image_create_info, VK_HEAP_DEVICE, &image_, &allocation_);
 	if (res != VK_SUCCESS) {
-		ERROR_LOG(Log::G3D, "vmaCreateImage failed: %s. Destroying image (tag: '%s')", VulkanResultToString(res), tag_);
+		ERROR_LOG(Log::G3D, "vk_heap_create_image failed: %s. Destroying image (tag: '%s')", VulkanResultToString(res), tag_);
 		_dbg_assert_msg_(res == VK_ERROR_OUT_OF_HOST_MEMORY || res == VK_ERROR_OUT_OF_DEVICE_MEMORY || res == VK_ERROR_TOO_MANY_OBJECTS, "%d", (int)res);
 		view_ = VK_NULL_HANDLE;
 		image_ = VK_NULL_HANDLE;
-		allocation_ = VK_NULL_HANDLE;
 		return false;
 	}
 
@@ -149,10 +144,9 @@ bool VulkanTexture::CreateDirect(int w, int h, int depth, int numMips, VkFormat 
 	if (res != VK_SUCCESS) {
 		ERROR_LOG(Log::G3D, "vkCreateImageView failed: %s. Destroying image (tag: '%s')", VulkanResultToString(res), tag_);
 		_assert_msg_(res == VK_ERROR_OUT_OF_HOST_MEMORY || res == VK_ERROR_OUT_OF_DEVICE_MEMORY || res == VK_ERROR_TOO_MANY_OBJECTS, "%d", (int)res);
-		vmaDestroyImage(vulkan_->Allocator(), image_, allocation_);
+		vk_heap_destroy_image(vulkan_->Heap(), image_, &allocation_);
 		view_ = VK_NULL_HANDLE;
 		image_ = VK_NULL_HANDLE;
-		allocation_ = VK_NULL_HANDLE;
 		return false;
 	}
 	vulkan_->SetDebugName(view_, VK_OBJECT_TYPE_IMAGE_VIEW, tag_);
@@ -344,7 +338,7 @@ void VulkanTexture::Destroy() {
 		vulkan_->Delete().QueueDeleteImageView(arrayView_);
 	}
 	if (image_ != VK_NULL_HANDLE) {
-		_dbg_assert_(allocation_ != VK_NULL_HANDLE);
+		_dbg_assert_(allocation_.memory != VK_NULL_HANDLE);
 		vulkan_->Delete().QueueDeleteImageAllocation(image_, allocation_);
 	}
 }

@@ -7,7 +7,7 @@
 class VulkanContext;
 class VulkanDeviceAllocator;
 
-VK_DEFINE_HANDLE(VmaAllocation);
+#include "Common/GPU/Vulkan/VulkanHeap.h"
 
 class VulkanBarrierBatch;
 
@@ -80,7 +80,7 @@ private:
 	VkImage image_ = VK_NULL_HANDLE;
 	VkImageView view_ = VK_NULL_HANDLE;
 	VkImageView arrayView_ = VK_NULL_HANDLE;
-	VmaAllocation allocation_ = VK_NULL_HANDLE;
+	vk_heap_alloc_t allocation_{};
 
 	int16_t width_ = 0;
 	int16_t height_ = 0;

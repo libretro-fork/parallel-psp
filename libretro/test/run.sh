@@ -9,6 +9,10 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 
 "$here/atrac3ptest"
 "$here/mediatest"
+"$here/vkheaptest"
+# The Vulkan heap is C89 for MSVC: no C99 in it.
+cc -std=c89 -ansi -pedantic -Werror=pedantic -Werror=declaration-after-statement -Wno-long-long \
+	-Wall -Wextra -Werror -isystem "$root" -fsyntax-only "$root/Common/GPU/Vulkan/VulkanHeap.c"
 "$here/codectest" "$data"
 for img in test.iso test.cso test16k.cso test_align.cso test_pad.cso test.chd test_zstd.chd test_zlib.chd test_lzma.chd test_huff.chd test_big.chd stored.zip deflated.zip; do
 	"$here/blocktest" "$data/test.iso" "$data/$img"
@@ -75,6 +79,16 @@ for offer in 2 1; do
 		"$root/libretro/ppsspp_libretro.so" "$data/test.iso" ppsspp_backend=vulkan \
 		|| { echo "FAIL: Vulkan negotiation v$offer"; exit 1; }
 	rm -rf "$save"
+done
+# Frames on Vulkan, as a frontend runs them, under the validation layer:
+# every frame shows a picture, at native and at an upscaled resolution.
+for res in 480x272 1440x816; do
+	out=$(VKN_FRAMES=120 VKN_DIR="$sys" timeout -k 5 600 "$here/vk_negotiate" \
+		"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" \
+		ppsspp_backend=vulkan ppsspp_internal_resolution=$res) || { echo "FAIL: Vulkan frames at $res"; exit 1; }
+	line=$(echo "$out" | grep 'frames=')
+	echo "vulkan $res $line"
+	case "$line" in *"frames=120 shown=120 "*) ;; *) echo "FAIL: Vulkan frames at $res"; exit 1;; esac
 done
 
 echo "All image and codec checks passed."

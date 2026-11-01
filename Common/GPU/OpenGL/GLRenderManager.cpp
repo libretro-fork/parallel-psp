@@ -35,7 +35,52 @@ GLRenderManager::GLRenderManager(HistoryBuffer<FrameTimeData, FRAME_TIME_HISTORY
 	// _dbg_assert_(sz == 88);
 }
 
+GLRStep *GLRenderManager::NewStep(GLRStepType type) {
+	if (freeSteps_.empty())
+		ReclaimSpentTasks();
+	if (freeSteps_.empty())
+		return new GLRStep(type);
+	GLRStep *step = freeSteps_.back();
+	freeSteps_.pop_back();
+	step->Reset(type);
+	return step;
+}
+
+GLRRenderThreadTask *GLRenderManager::NewTask(GLRRunType type) {
+	if (freeTasks_.empty())
+		ReclaimSpentTasks();
+	if (freeTasks_.empty())
+		return new GLRRenderThreadTask(type);
+	GLRRenderThreadTask *task = freeTasks_.back();
+	freeTasks_.pop_back();
+	task->runType = type;
+	task->frame = -1;
+	return task;
+}
+
+// Recording thread: tasks the render thread has finished, with their steps, back into the free lists.
+void GLRenderManager::ReclaimSpentTasks() {
+	spentTasks_.Drain([this](GLRRenderThreadTask *&&task) {
+		freeSteps_.insert(freeSteps_.end(), task->steps.begin(), task->steps.end());
+		task->steps.clear();
+		task->initSteps.clear();
+		task->newPushBuffers.clear();
+		freeTasks_.push_back(task);
+	});
+}
+
+void GLRenderManager::FreePools() {
+	ReclaimSpentTasks();
+	for (GLRStep *step : freeSteps_)
+		delete step;
+	freeSteps_.clear();
+	for (GLRRenderThreadTask *task : freeTasks_)
+		delete task;
+	freeTasks_.clear();
+}
+
 GLRenderManager::~GLRenderManager() {
+	FreePools();
 	for (int i = 0; i < MAX_INFLIGHT_FRAMES; i++) {
 		_assert_(frameData_[i].deleter.IsEmpty());
 		_assert_(frameData_[i].deleter_prev.IsEmpty());
@@ -117,6 +162,8 @@ void GLRenderManager::ThreadEnd() {
 	queueRunner_.RunInitSteps(initSteps_, true);
 	initSteps_.clear();
 	queueRunner_.RunSteps(steps_, frameData_[0], true, false, false);
+	for (GLRStep *step : steps_)
+		delete step;
 	steps_.clear();
 	INFO_LOG(Log::G3D, "GLRenderManager::ThreadEnd end");
 }
@@ -184,12 +231,13 @@ bool GLRenderManager::RunQueue(RunUntil until) {
 
 		// Render the scene.
 		VLOG("  PULL: Frame %d RUN (%0.3f)", task->frame, time_now_d());
+		// After the run, the recording thread owns and reuses the task.
 		if (Run(*task) && until == RunUntil::PRESENT) {
 			// Swap requested, so we just bail the loop.
-			delete task;
+			spentTasks_.Push(task);
 			break;
 		}
-		delete task;
+		spentTasks_.Push(task);
 	};
 	return true;
 }
@@ -220,7 +268,7 @@ void GLRenderManager::BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRende
 		VLOG("Empty render step. Usually happens after uploading pixels.");
 	}
 
-	GLRStep *step = new GLRStep{ GLRStepType::RENDER };
+	GLRStep *step = NewStep(GLRStepType::RENDER);
 	// This is what queues up new passes, and can end previous ones.
 	step->render.framebuffer = fb;
 	step->render.color = color;
@@ -278,7 +326,7 @@ void GLRenderManager::BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, 
 }
 
 void GLRenderManager::CopyFramebuffer(GLRFramebuffer *src, GLRect2D srcRect, GLRFramebuffer *dst, GLOffset2D dstPos, int aspectMask, const char *tag) {
-	GLRStep *step = new GLRStep{ GLRStepType::COPY };
+	GLRStep *step = NewStep(GLRStepType::COPY);
 	step->copy.srcRect = srcRect;
 	step->copy.dstPos = dstPos;
 	step->copy.src = src;
@@ -293,7 +341,7 @@ void GLRenderManager::CopyFramebuffer(GLRFramebuffer *src, GLRect2D srcRect, GLR
 }
 
 void GLRenderManager::BlitFramebuffer(GLRFramebuffer *src, GLRect2D srcRect, GLRFramebuffer *dst, GLRect2D dstRect, int aspectMask, bool filter, const char *tag) {
-	GLRStep *step = new GLRStep{ GLRStepType::BLIT };
+	GLRStep *step = NewStep(GLRStepType::BLIT);
 	step->blit.srcRect = srcRect;
 	step->blit.dstRect = dstRect;
 	step->blit.src = src;
@@ -312,7 +360,7 @@ bool GLRenderManager::CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBit
 	Draw::ReadbackStats::Scope readbackScope(readbackStats_, tag, mode, w, h, destFormat);
 	_assert_(pixels);
 
-	GLRStep *step = new GLRStep{ GLRStepType::READBACK };
+	GLRStep *step = NewStep(GLRStepType::READBACK);
 	step->readback.src = src;
 	step->readback.srcRect = { x, y, w, h };
 	step->readback.aspectMask = aspectBits;
@@ -376,7 +424,7 @@ bool GLRenderManager::CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBit
 void GLRenderManager::CopyImageToMemorySync(GLRTexture *texture, int mipLevel, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, const char *tag) {
 	_assert_(texture);
 	_assert_(pixels);
-	GLRStep *step = new GLRStep{ GLRStepType::READBACK_IMAGE };
+	GLRStep *step = NewStep(GLRStepType::READBACK_IMAGE);
 	step->readback_image.texture = texture;
 	step->readback_image.mipLevel = mipLevel;
 	step->readback_image.srcRect = { x, y, w, h };
@@ -444,14 +492,14 @@ void GLRenderManager::Finish() {
 	}
 
 	VLOG("PUSH: Finish, pushing task. curFrame = %d", curFrame);
-	GLRRenderThreadTask *task = new GLRRenderThreadTask(GLRRunType::SUBMIT);
+	GLRRenderThreadTask *task = NewTask(GLRRunType::SUBMIT);
 	task->frame = curFrame;
 	TakeRecordedWork(task);
 	PushTask(task);
 }
 
 void GLRenderManager::Present() {
-	GLRRenderThreadTask *presentTask = new GLRRenderThreadTask(GLRRunType::PRESENT);
+	GLRRenderThreadTask *presentTask = NewTask(GLRRunType::PRESENT);
 	presentTask->frame = curFrame_;
 	PushTask(presentTask);
 
@@ -562,7 +610,7 @@ void GLRenderManager::FlushSync() {
 	{
 		VLOG("PUSH: Frame[%d].readyForRun = true (sync)", curFrame_);
 
-		GLRRenderThreadTask *task = new GLRRenderThreadTask(GLRRunType::SYNC);
+		GLRRenderThreadTask *task = NewTask(GLRRunType::SYNC);
 		task->frame = curFrame_;
 		TakeRecordedWork(task);
 		PushTask(task);

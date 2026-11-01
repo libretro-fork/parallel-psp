@@ -688,7 +688,6 @@ void GLQueueRunner::RunSteps(const std::vector<GLRStep *> &steps, GLFrameData &f
 			default:
 				break;
 			}
-			delete steps[i];
 		}
 		return;
 	}
@@ -766,9 +765,6 @@ void GLQueueRunner::RunSteps(const std::vector<GLRStep *> &steps, GLFrameData &f
 #endif
 		if (frameData.profile.enabled) {
 			frameData.profile.passesString += StepToString(step);
-		}
-		if (!keepSteps) {
-			delete steps[i];
 		}
 	}
 

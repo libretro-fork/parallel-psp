@@ -115,12 +115,22 @@ void DisplayFireVblankEnd() {
 }
 
 void DisplayFireFlip() {
-	// A copy, since a listener may unregister itself.
-	std::vector<FlipListener> toCall = flipListeners;
-
-	for (FlipListener cb : toCall) {
-		cb.first(cb.second);
+	// A copy, since a listener may unregister itself. Kept between flips, so a flip
+	// allocates nothing; a flip fired from inside a listener copies for itself.
+	static std::vector<FlipListener> toCall;
+	static int depth;
+	if (depth++ == 0) {
+		toCall.assign(flipListeners.begin(), flipListeners.end());
+		for (size_t i = 0; i < toCall.size(); i++) {
+			toCall[i].first(toCall[i].second);
+		}
+	} else {
+		std::vector<FlipListener> nested = flipListeners;
+		for (FlipListener cb : nested) {
+			cb.first(cb.second);
+		}
 	}
+	depth--;
 }
 
 void DisplayFireActualFlip() {

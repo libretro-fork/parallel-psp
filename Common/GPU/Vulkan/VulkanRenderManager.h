@@ -573,6 +573,14 @@ private:
 	void FlushSync();
 
 	void PushRenderTask(VKRRenderThreadTask *task);
+
+	// Steps and tasks are reused, not allocated per frame. The recording thread owns the free
+	// lists; whoever ran a task hands it back, steps and all, through spentTasks_.
+	VKRStep *NewStep(VKRStepType type);
+	VKRRenderThreadTask *NewTask(VKRRunType type);
+	void RecycleTask(VKRRenderThreadTask *task);
+	void ReclaimSpentTasks();
+	void FreePools();
 	void QueueCompile(VKRGraphicsPipeline *pipeline, Promise<VkPipeline> *promise, VkRenderPass compatibleRenderPass, RenderPassType rpType, VkSampleCountFlagBits sampleCount);
 	bool CompileThreadRunning() const {
 		return retro_atomic_load_acquire_int(const_cast<retro_atomic_int_t *>(&runCompileThread_)) != 0;
@@ -625,6 +633,9 @@ private:
 
 	// Tasks for the render thread, which parks on renderThreadWork_.
 	MpscQueue<VKRRenderThreadTask *> renderThreadQueue_;
+	MpscQueue<VKRRenderThreadTask *> spentTasks_;
+	std::vector<VKRRenderThreadTask *> freeTasks_;
+	std::vector<VKRStep *> freeSteps_;
 	EventCounter renderThreadWork_;
 
 	// Shader compilation thread to compile while emulating the rest of the frame.

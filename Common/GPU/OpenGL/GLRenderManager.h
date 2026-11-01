@@ -893,14 +893,22 @@ private:
 	}
 
 	// Moves what the recording thread has gathered into a task.
+	// Swapped, so the recording side keeps the task's emptied storage.
 	void TakeRecordedWork(GLRRenderThreadTask *task) {
-		task->initSteps = std::move(initSteps_);
+		std::swap(task->initSteps, initSteps_);
 		initSteps_.clear();
-		task->steps = std::move(steps_);
+		task->steps.swap(steps_);
 		steps_.clear();
-		task->newPushBuffers = std::move(newPushBuffers_);
+		task->newPushBuffers.swap(newPushBuffers_);
 		newPushBuffers_.clear();
 	}
+
+	// Steps and tasks are reused, not allocated per frame. The recording thread owns the free
+	// lists; the render thread hands each run task back, steps and all, through spentTasks_.
+	GLRStep *NewStep(GLRStepType type);
+	GLRRenderThreadTask *NewTask(GLRRunType type);
+	void ReclaimSpentTasks();
+	void FreePools();
 
 	void PushTask(GLRRenderThreadTask *task) {
 		renderThreadQueue_.Push(task);
@@ -926,6 +934,9 @@ private:
 
 	// Tasks for the render thread, oldest first. The render thread drains them into its own list.
 	MpscQueue<GLRRenderThreadTask *> renderThreadQueue_;
+	MpscQueue<GLRRenderThreadTask *> spentTasks_;
+	std::vector<GLRRenderThreadTask *> freeTasks_;
+	std::vector<GLRStep *> freeSteps_;
 	EventCounter renderThreadWork_;
 	std::deque<GLRRenderThreadTask *> renderThreadTasks_;
 

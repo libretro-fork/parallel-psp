@@ -339,6 +339,13 @@ const char *GLRAspectToString(GLRAspect aspect);
 
 struct GLRStep {
 	GLRStep(GLRStepType _type) : stepType(_type), tag() {}
+	// Ready for reuse as a new step, keeping the command storage.
+	void Reset(GLRStepType type) {
+		stepType = type;
+		commands.clear();
+		dependencies.clear();
+		tag = nullptr;
+	}
 	GLRStepType stepType;
 	FastVec<GLRRenderData> commands;
 	TinySet<const GLRFramebuffer *, 8> dependencies;

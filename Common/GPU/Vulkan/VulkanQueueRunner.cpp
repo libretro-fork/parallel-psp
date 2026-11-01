@@ -295,7 +295,7 @@ void VulkanQueueRunner::PreprocessSteps(std::vector<VKRStep *> &steps) {
 	}
 }
 
-void VulkanQueueRunner::RunSteps(std::vector<VKRStep *> &steps, int curFrame, FrameData &frameData, FrameDataShared &frameDataShared, bool keepSteps) {
+void VulkanQueueRunner::RunSteps(std::vector<VKRStep *> &steps, int curFrame, FrameData &frameData, FrameDataShared &frameDataShared) {
 	QueueProfileContext *profile = frameData.profile.enabled ? &frameData.profile : nullptr;
 
 	if (profile)
@@ -400,13 +400,9 @@ void VulkanQueueRunner::RunSteps(std::vector<VKRStep *> &steps, int curFrame, Fr
 		}
 	}
 
-	// Deleting all in one go should be easier on the instruction cache than deleting
-	// them as we go - and easier to debug because we can look backwards in the frame.
-	if (!keepSteps) {
-		for (auto step : steps) {
-			delete step;
-		}
-		steps.clear();
+	// Callbacks are released on this thread; the steps go back to the recording thread.
+	for (auto step : steps) {
+		step->Dispose();
 	}
 
 	if (profile)
@@ -770,12 +766,18 @@ std::string VulkanQueueRunner::StepToString(VulkanContext *vulkan, const VKRStep
 // much a guaranteed neutral or win in terms of GPU power. However, dependency calculation really
 // must be perfect!
 void VulkanQueueRunner::ApplyRenderPassMerge(std::vector<VKRStep *> &steps) {
-	// First let's count how many times each framebuffer is rendered to.
-	// If it's more than one, let's do our best to merge them. This can help God of War quite a bit.
-	std::unordered_map<VKRFramebuffer *, int> counts;
-	for (int i = 0; i < (int)steps.size(); i++) {
-		if (steps[i]->stepType == VKRStepType::RENDER) {
-			counts[steps[i]->render.framebuffer]++;
+	// First let's find the framebuffers rendered to more than once.
+	// Those, let's do our best to merge. This can help God of War quite a bit.
+	// A frame has few steps, so a pairwise scan beats building a map.
+	renderedAgain_.assign(steps.size(), 0);
+	for (size_t i = 0; i < steps.size(); i++) {
+		if (steps[i]->stepType != VKRStepType::RENDER || renderedAgain_[i])
+			continue;
+		for (size_t j = i + 1; j < steps.size(); j++) {
+			if (steps[j]->stepType == VKRStepType::RENDER && steps[j]->render.framebuffer == steps[i]->render.framebuffer) {
+				renderedAgain_[i] = 1;
+				renderedAgain_[j] = 1;
+			}
 		}
 	}
 
@@ -802,7 +804,7 @@ void VulkanQueueRunner::ApplyRenderPassMerge(std::vector<VKRStep *> &steps) {
 	// we'll scan forward and slurp up any rendering that can be merged across.
 	for (int i = 0; i < (int)steps.size(); i++) {
 		decltype(steps[i]->render) &render_i = steps[i]->render;
-		if (steps[i]->stepType == VKRStepType::RENDER && counts[render_i.framebuffer] > 1) {
+		if (steps[i]->stepType == VKRStepType::RENDER && renderedAgain_[i]) {
 			auto fb = render_i.framebuffer;
 			TinySet<VKRFramebuffer *, 8> touchedFramebuffers;  // must be the same fast-size as the dependencies TinySet for annoying reasons.
 			for (int j = i + 1; j < (int)steps.size(); j++) {

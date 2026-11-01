@@ -1,4 +1,3 @@
-#include <deque>
 #include <cstdint>
 
 #include <map>
@@ -446,6 +445,52 @@ bool VulkanRenderManager::RecreatePresentationIfNeeded() {
 	return true;
 }
 
+VKRStep *VulkanRenderManager::NewStep(VKRStepType type) {
+	if (freeSteps_.empty())
+		ReclaimSpentTasks();
+	if (freeSteps_.empty())
+		return new VKRStep(type);
+	VKRStep *step = freeSteps_.back();
+	freeSteps_.pop_back();
+	step->Reset(type);
+	return step;
+}
+
+VKRRenderThreadTask *VulkanRenderManager::NewTask(VKRRunType type) {
+	if (freeTasks_.empty())
+		ReclaimSpentTasks();
+	if (freeTasks_.empty())
+		return new VKRRenderThreadTask(type);
+	VKRRenderThreadTask *task = freeTasks_.back();
+	freeTasks_.pop_back();
+	task->runType = type;
+	task->frame = -1;
+	return task;
+}
+
+// Recording thread: a task whose run has finished, with its steps, back into the free lists.
+void VulkanRenderManager::RecycleTask(VKRRenderThreadTask *task) {
+	freeSteps_.insert(freeSteps_.end(), task->steps.begin(), task->steps.end());
+	task->steps.clear();
+	freeTasks_.push_back(task);
+}
+
+void VulkanRenderManager::ReclaimSpentTasks() {
+	spentTasks_.Drain([this](VKRRenderThreadTask *&&task) {
+		RecycleTask(task);
+	});
+}
+
+void VulkanRenderManager::FreePools() {
+	ReclaimSpentTasks();
+	for (VKRStep *step : freeSteps_)
+		delete step;
+	freeSteps_.clear();
+	for (VKRRenderThreadTask *task : freeTasks_)
+		delete task;
+	freeTasks_.clear();
+}
+
 void VulkanRenderManager::PushRenderTask(VKRRenderThreadTask *task) {
 	renderThreadQueue_.Push(task);
 	renderThreadWork_.Notify();
@@ -539,6 +584,7 @@ VulkanRenderManager::~VulkanRenderManager() {
 	}
 
 	_dbg_assert_(!CompileThreadRunning());  // StopThread should already have been called from DestroyBackbuffers.
+	FreePools();
 
 	vulkan_->WaitUntilQueueIdle();
 	vulkan_->PerformPendingDeletes();  // Some callbacks can contain a reference to the render manager.
@@ -616,12 +662,16 @@ void VulkanRenderManager::CompileThreadFunc() {
 
 void VulkanRenderManager::RenderThreadFunc() {
 	SetCurrentThreadName("VulkanRenderMan");
-	std::deque<VKRRenderThreadTask *> pendingTasks;
+	// Reused across drains, so it stops allocating once it has grown.
+	std::vector<VKRRenderThreadTask *> pendingTasks;
+	size_t nextTask = 0;
 	while (true) {
 		_dbg_assert_(useRenderThread_);
 
 		// Pop a task of the queue and execute it.
-		if (pendingTasks.empty()) {
+		if (nextTask == pendingTasks.size()) {
+			pendingTasks.clear();
+			nextTask = 0;
 			const int seen = renderThreadWork_.Seen();
 			renderThreadQueue_.Drain([&](VKRRenderThreadTask *&&t) {
 				pendingTasks.push_back(t);
@@ -631,8 +681,7 @@ void VulkanRenderManager::RenderThreadFunc() {
 				continue;
 			}
 		}
-		VKRRenderThreadTask *task = pendingTasks.front();
-		pendingTasks.pop_front();
+		VKRRenderThreadTask *task = pendingTasks[nextTask++];
 
 		if (task->runType == VKRRunType::EXIT) {
 			// Oh, host wanted out. Let's leave.
@@ -642,7 +691,8 @@ void VulkanRenderManager::RenderThreadFunc() {
 		}
 
 		Run(*task);
-		delete task;
+		// The last access: the recording thread reuses it from here on.
+		spentTasks_.Push(task);
 	}
 
 	// Wait for the device to be done with everything, before tearing stuff down.
@@ -967,7 +1017,7 @@ void VulkanRenderManager::EndCurRenderStep() {
 void VulkanRenderManager::QueueGpuCallback(void (*record)(void *, VkCommandBuffer, ::FrameData &),
 	void (*dispose)(void *), void *context) {
 	EndCurRenderStep();
-	auto *step = new VKRStep(VKRStepType::GPU_CALLBACK);
+	auto *step = NewStep(VKRStepType::GPU_CALLBACK);
 	step->tag = "Video conversion";
 	step->callback = {record, dispose, context};
 	steps_.push_back(step);
@@ -1037,7 +1087,7 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 			if (curRenderStep_->render.colorLoad != VKRRenderPassLoadAction::CLEAR && curRenderStep_->render.depthLoad != VKRRenderPassLoadAction::CLEAR && curRenderStep_->render.stencilLoad != VKRRenderPassLoadAction::CLEAR) {
 				// Can trivially kill the last empty render step.
 				_dbg_assert_(steps_.back() == curRenderStep_);
-				delete steps_.back();
+				freeSteps_.push_back(steps_.back());
 				steps_.pop_back();
 				curRenderStep_ = nullptr;
 			}
@@ -1069,7 +1119,7 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 		}
 	}
 
-	VKRStep *step = new VKRStep{ VKRStepType::RENDER };
+	VKRStep *step = NewStep(VKRStepType::RENDER);
 	step->render.framebuffer = fb;
 	step->render.colorLoad = colorLoad;
 	step->render.depthLoad = depthLoad;
@@ -1148,7 +1198,7 @@ bool VulkanRenderManager::CopyFramebufferToMemory(VKRFramebuffer *src, VkImageAs
 
 	EndCurRenderStep();
 
-	VKRStep *step = new VKRStep{ VKRStepType::READBACK };
+	VKRStep *step = NewStep(VKRStepType::READBACK);
 	step->readback.aspectMask = aspectBits;
 	step->readback.src = src;
 	step->readback.srcRect.offset = { x, y };
@@ -1215,7 +1265,7 @@ void VulkanRenderManager::CopyImageToMemorySync(VkImage image, int mipLevel, int
 
 	EndCurRenderStep();
 
-	VKRStep *step = new VKRStep{ VKRStepType::READBACK_IMAGE };
+	VKRStep *step = NewStep(VKRStepType::READBACK_IMAGE);
 	step->readback_image.image = image;
 	step->readback_image.srcRect.offset = { x, y };
 	step->readback_image.srcRect.extent = { (uint32_t)w, (uint32_t)h };
@@ -1395,7 +1445,7 @@ void VulkanRenderManager::CopyFramebuffer(VKRFramebuffer *src, VkRect2D srcRect,
 
 	EndCurRenderStep();
 
-	VKRStep *step = new VKRStep{ VKRStepType::COPY };
+	VKRStep *step = NewStep(VKRStepType::COPY);
 
 	step->copy.aspectMask = aspectMask;
 	step->copy.src = src;
@@ -1455,7 +1505,7 @@ void VulkanRenderManager::BlitFramebuffer(VKRFramebuffer *src, VkRect2D srcRect,
 
 	EndCurRenderStep();
 
-	VKRStep *step = new VKRStep{ VKRStepType::BLIT };
+	VKRStep *step = NewStep(VKRStepType::BLIT);
 	step->blit.aspectMask = aspectMask;
 	step->blit.src = src;
 	step->blit.srcRect = srcRect;
@@ -1538,16 +1588,16 @@ void VulkanRenderManager::Finish() {
 	}
 
 	VLOG("PUSH: Frame[%d]", curFrame);
-	VKRRenderThreadTask *task = new VKRRenderThreadTask(VKRRunType::SUBMIT);
+	VKRRenderThreadTask *task = NewTask(VKRRunType::SUBMIT);
 	task->frame = curFrame;
+	// Swapped, so steps_ keeps the task's emptied storage.
+	task->steps.swap(steps_);
 	if (useRenderThread_) {
-		task->steps = std::move(steps_);
 		PushRenderTask(task);
 	} else {
 		// Just do it!
-		task->steps = std::move(steps_);
 		Run(*task);
-		delete task;
+		RecycleTask(task);
 	}
 
 	steps_.clear();
@@ -1559,14 +1609,14 @@ void VulkanRenderManager::Present() {
 		presentation->BeginPresent();
 	}
 
-	VKRRenderThreadTask *task = new VKRRenderThreadTask(VKRRunType::PRESENT);
+	VKRRenderThreadTask *task = NewTask(VKRRunType::PRESENT);
 	task->frame = curFrame;
 	if (useRenderThread_) {
 		PushRenderTask(task);
 	} else {
 		// Just do it!
 		Run(*task);
-		delete task;
+		RecycleTask(task);
 	}
 
 	vulkan_->EndFrame();
@@ -1688,9 +1738,9 @@ void VulkanRenderManager::FlushSync() {
 	if (useRenderThread_) {
 		{
 			VLOG("PUSH: Frame[%d]", curFrame);
-			VKRRenderThreadTask *task = new VKRRenderThreadTask(VKRRunType::SYNC);
+			VKRRenderThreadTask *task = NewTask(VKRRunType::SYNC);
 			task->frame = curFrame;
-			task->steps = std::move(steps_);
+			task->steps.swap(steps_);
 			PushRenderTask(task);
 			steps_.clear();
 		}
@@ -1699,10 +1749,11 @@ void VulkanRenderManager::FlushSync() {
 		ParkingLotWait(&frameData.syncDone, [&] { return retro_atomic_load_acquire_int(&frameData.syncDone) != 0; });
 		retro_atomic_store_relaxed_int(&frameData.syncDone, 0);
 	} else {
-		VKRRenderThreadTask task(VKRRunType::SYNC);
-		task.frame = curFrame;
-		task.steps = std::move(steps_);
-		Run(task);
+		VKRRenderThreadTask *task = NewTask(VKRRunType::SYNC);
+		task->frame = curFrame;
+		task->steps.swap(steps_);
+		Run(*task);
+		RecycleTask(task);
 		steps_.clear();
 	}
 }

@@ -140,8 +140,25 @@ class VKRRenderPass;
 struct VKRStep {
 	VKRStep(VKRStepType _type) : stepType(_type) { if (_type == VKRStepType::GPU_CALLBACK) callback = {}; }
 	~VKRStep() {
-		if (stepType == VKRStepType::GPU_CALLBACK && callback.dispose)
+		Dispose();
+	}
+	// Whoever ran the step releases its callback; the recording thread then reuses the step.
+	void Dispose() {
+		if (stepType == VKRStepType::GPU_CALLBACK && callback.dispose) {
 			callback.dispose(callback.context);
+			callback.dispose = nullptr;
+		}
+	}
+	// Ready for reuse as a new step, keeping the command storage.
+	void Reset(VKRStepType type) {
+		Dispose();
+		stepType = type;
+		commands.clear();
+		preTransitions.clear();
+		dependencies.clear();
+		tag = nullptr;
+		if (type == VKRStepType::GPU_CALLBACK)
+			callback = {};
 	}
 
 	VKRStepType stepType;
@@ -230,7 +247,8 @@ public:
 	}
 
 	void PreprocessSteps(std::vector<VKRStep *> &steps);
-	void RunSteps(std::vector<VKRStep *> &steps, int curFrame, FrameData &frameData, FrameDataShared &frameDataShared, bool keepSteps = false);
+	// Runs and disposes the steps; the caller owns and reuses them.
+	void RunSteps(std::vector<VKRStep *> &steps, int curFrame, FrameData &frameData, FrameDataShared &frameDataShared);
 	void LogSteps(const std::vector<VKRStep *> &steps, bool verbose);
 
 	static std::string StepToString(VulkanContext *vulkan, const VKRStep &step);
@@ -300,7 +318,9 @@ private:
 
 	static void ApplyMGSHack(std::vector<VKRStep *> &steps);
 	static void ApplySonicHack(std::vector<VKRStep *> &steps);
-	static void ApplyRenderPassMerge(std::vector<VKRStep *> &steps);
+	void ApplyRenderPassMerge(std::vector<VKRStep *> &steps);
+	// Per step: its framebuffer is rendered to more than once. Kept, so a frame allocates nothing.
+	std::vector<uint8_t> renderedAgain_;
 
 	static void SetupTransferDstWriteAfterWrite(VKRImage &img, VkImageAspectFlags aspect, VulkanBarrierBatch *recordBarrier);
 

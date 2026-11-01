@@ -81,14 +81,23 @@ for offer in 2 1; do
 	rm -rf "$save"
 done
 # Frames on Vulkan, as a frontend runs them, under the validation layer:
-# every frame shows a picture, at native and at an upscaled resolution.
-for res in 480x272 1440x816; do
+# every frame shows a picture, at native and at an upscaled resolution, and
+# recording on the render thread or without it gives the same pictures.
+ref=
+for run in "480x272 Up to 1" "480x272 No buffer" "1440x816 Up to 1"; do
+	res=${run%% *}
+	inflight=${run#* }
 	out=$(VKN_FRAMES=120 VKN_DIR="$sys" timeout -k 5 600 "$here/vk_negotiate" \
 		"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" \
-		ppsspp_backend=vulkan ppsspp_internal_resolution=$res) || { echo "FAIL: Vulkan frames at $res"; exit 1; }
+		ppsspp_backend=vulkan ppsspp_internal_resolution=$res "ppsspp_inflight_frames=$inflight") \
+		|| { echo "FAIL: Vulkan frames, $run"; exit 1; }
 	line=$(echo "$out" | grep 'frames=')
-	echo "vulkan $res $line"
-	case "$line" in *"frames=120 shown=120 "*) ;; *) echo "FAIL: Vulkan frames at $res"; exit 1;; esac
+	echo "vulkan $run: $line"
+	case "$line" in *"frames=120 shown=120 "*) ;; *) echo "FAIL: Vulkan frames, $run"; exit 1;; esac
+	if [ "$res" = 480x272 ]; then
+		[ -z "$ref" ] && ref=$line
+		[ "$line" = "$ref" ] || { echo "FAIL: Vulkan pictures differ without the render thread"; exit 1; }
+	fi
 done
 
 echo "All image and codec checks passed."

@@ -1111,6 +1111,8 @@ namespace Libretro {
    static Thread emuThread;
    static retro_atomic_int_t emuFrameRequested{ 0 };
    static void EmuFrame() {
+      // The statistics are per frame: left alone they sum the whole session and overflow.
+      PSP_UpdateDebugStats(false);
       // Frontend callbacks only publish changes. Files and guest memory are
       // touched here, on the same owner that executes PSP code.
       pendingCheats.Drain([](CheatChange &&change) {

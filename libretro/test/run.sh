@@ -17,6 +17,7 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 "$here/swmathtest"
 "$here/softjitabitest"
 "$here/texdecodetest"
+"$here/gluploadtest"
 "$here/vkheaptest"
 # The Vulkan heap is C89 for MSVC: no C99 in it.
 cc -std=c89 -ansi -pedantic -Werror=pedantic -Werror=declaration-after-statement -Wno-long-long \
@@ -40,6 +41,10 @@ for img in test.iso test.cso test.chd test_zstd.chd stored.zip deflated.zip; do
 	[ -z "$ref" ] && ref=$line
 	[ "$line" = "$ref" ] || { echo "FAIL: $img differs from test.iso"; exit 1; }
 done
+save=$(mktemp -d)
+(cd "$root/pspautotests/tests/gpu/primitives" && LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 \
+	"$here/gpustatstest" "$root/pspautotests/tests/gpu/primitives/triangles.prx")
+rm -rf "$save"
 # The GL backend runs the emulator on a thread of its own. Drive it through every
 # path that pauses or stops that thread; Mesa's llvmpipe is enough.
 mkdir -p "$data/gl"

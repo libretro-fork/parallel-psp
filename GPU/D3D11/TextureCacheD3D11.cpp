@@ -143,6 +143,7 @@ TextureCacheD3D11::TextureCacheD3D11(Draw::DrawContext *draw, Draw2D *draw2D)
 TextureCacheD3D11::~TextureCacheD3D11() {
 	Clear(true);
 	DestroyDeviceObjects();
+	FreeAlignedMemory(uploadScratch_);
 }
 
 void TextureCacheD3D11::InitDeviceObjects() {
@@ -269,12 +270,13 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 	// D3D11 caps textures at 16384 pixels anyway.
 	D3D11_SUBRESOURCE_DATA subresData[16]{};
 
-	auto freeSubresData = [&subresData]() {
-		for (size_t i = 0; i < ARRAY_SIZE(subresData); i++) {
-			if (subresData[i].pSysMem) {
-				FreeAlignedMemory((void *)subresData[i].pSysMem);
-				subresData[i].pSysMem = nullptr;
-			}
+	// Every level's data comes from uploadScratch_, kept from texture to texture: a fresh
+	// allocation per level was a page-faulting mapping each for the larger ones.
+	auto freeSubresData = [this]() {
+		if (uploadScratchSize_ > UPLOAD_SCRATCH_RETAIN) {
+			FreeAlignedMemory(uploadScratch_);
+			uploadScratch_ = nullptr;
+			uploadScratchSize_ = 0;
 		}
 	};
 
@@ -289,14 +291,15 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 
 	Draw::DataFormat texFmt = FromD3D11Format(dstFmt);
 
+	// Each level's row pitch and size, then one piece of scratch for them all.
+	int levelStride[ARRAY_SIZE(subresData)]{};
+	size_t levelOffset[ARRAY_SIZE(subresData)]{};
+	size_t scratchBytes = 0;
 	for (int i = 0; i < levels; i++) {
-		int srcLevel = (i == 0) ? plan.baseLevelSrc : i;
-
 		int mipWidth;
 		int mipHeight;
 		plan.GetMipSize(i, &mipWidth, &mipHeight);
 
-		u8 *data = nullptr;
 		int stride = 0;
 
 		int dataSize;
@@ -321,24 +324,46 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 			dataSize = stride * mipHeight;
 		}
 
+		// 3D textures put their slices one after another in slot 0, each of the first one's size.
+		const int slot = plan.depth == 1 ? i : 0;
+		if (plan.depth == 1 || i == 0) {
+			levelStride[slot] = stride;
+			levelOffset[slot] = scratchBytes;
+			const size_t bytes = plan.depth == 1 ? (size_t)dataSize : (size_t)stride * mipHeight * plan.depth;
+			scratchBytes += (bytes + 15) & ~(size_t)15;
+		}
+	}
+	if (scratchBytes > uploadScratchSize_) {
+		FreeAlignedMemory(uploadScratch_);
+		uploadScratch_ = (u8 *)AllocateAlignedMemory(scratchBytes, 16);
+		uploadScratchSize_ = uploadScratch_ ? scratchBytes : 0;
+	}
+	if (!uploadScratch_) {
+		ERROR_LOG(Log::G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%d bytes)", (int)scratchBytes);
+		return;
+	}
+
+	for (int i = 0; i < levels; i++) {
+		int srcLevel = (i == 0) ? plan.baseLevelSrc : i;
+
+		int mipWidth;
+		int mipHeight;
+		plan.GetMipSize(i, &mipWidth, &mipHeight);
+
+		u8 *data;
+		int stride;
 		if (plan.depth == 1) {
-			data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+			stride = levelStride[i];
+			data = uploadScratch_ + levelOffset[i];
 			subresData[i].pSysMem = data;
 			subresData[i].SysMemPitch = stride;
 			subresData[i].SysMemSlicePitch = 0;
 		} else {
-			if (i == 0) {
-				subresData[0].pSysMem = AllocateAlignedMemory(stride * mipHeight * plan.depth, 16);
-				subresData[0].SysMemPitch = stride;
-				subresData[0].SysMemSlicePitch = stride * mipHeight;
-			}
-			data = (uint8_t *)subresData[0].pSysMem + stride * mipHeight * i;
-		}
-
-		if (!data) {
-			ERROR_LOG(Log::G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", mipWidth, mipHeight);
-			freeSubresData();
-			return;
+			stride = levelStride[0];
+			subresData[0].pSysMem = uploadScratch_ + levelOffset[0];
+			subresData[0].SysMemPitch = stride;
+			subresData[0].SysMemSlicePitch = stride * mipHeight;
+			data = uploadScratch_ + levelOffset[0] + (size_t)stride * mipHeight * i;
 		}
 
 		LoadTextureLevel(*entry, data, 0, stride, plan, srcLevel, texFmt, TexDecodeFlags{});

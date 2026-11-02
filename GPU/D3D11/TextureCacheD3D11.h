@@ -88,6 +88,11 @@ private:
 
 	SamplerCacheD3D11 samplerCache_;
 
+	// Texture level data for CreateTexture, reused; more than the cap goes back after the texture.
+	static const size_t UPLOAD_SCRATCH_RETAIN = 16 * 1024 * 1024;
+	u8 *uploadScratch_ = nullptr;
+	size_t uploadScratchSize_ = 0;
+
 	ID3D11ShaderResourceView *lastBoundTexture_ = D3D11_INVALID_TEX;
 	Microsoft::WRL::ComPtr<ID3D11Buffer> depalConstants_;
 	Microsoft::WRL::ComPtr<ID3D11SamplerState> samplerPoint2DClamp_;

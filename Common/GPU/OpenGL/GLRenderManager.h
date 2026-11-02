@@ -442,6 +442,12 @@ public:
 	}
 
 	// Takes ownership over the data pointer and delete[]-s it.
+	// Memory for upload data the init steps read, with GLRAllocType::FRAME: it lasts until the
+	// frame slot comes round again. Null outside a frame, where the caller allocates as before.
+	uint8_t *AllocUploadData(size_t size) {
+		return insideFrame_ ? frameData_[curFrame_].upload.Allocate(size) : nullptr;
+	}
+
 	void TextureImage(GLRTexture *texture, int level, int width, int height, int depth, Draw::DataFormat format, uint8_t *data, GLRAllocType allocType = GLRAllocType::NEW, bool linearFilter = false) {
 		GLRInitStep &step = initSteps_.push_uninitialized();
 		step.stepType = GLRInitStepType::TEXTURE_IMAGE;

@@ -36,6 +36,32 @@ public:
 	std::vector<GLPushBuffer *> pushBuffers;
 };
 
+// Texture data the render thread uploads from, written by the thread that records the frame.
+// Reset once the frame slot comes round again, when the render thread is done with it, so an
+// upload costs no allocation: large ones were a fresh, page-faulting mapping each on Windows.
+class GLUploadArena {
+public:
+	GLUploadArena() = default;
+	GLUploadArena(const GLUploadArena &) = delete;
+	GLUploadArena &operator=(const GLUploadArena &) = delete;
+	~GLUploadArena();
+
+	// 16-byte aligned, valid until Reset().
+	uint8_t *Allocate(size_t size);
+	void Reset();
+	size_t Retained() const;
+
+private:
+	struct Chunk {
+		uint8_t *data;
+		size_t size;
+	};
+	std::vector<Chunk> chunks_;
+	size_t chunk_ = 0;
+	size_t offset_ = 0;
+	size_t used_ = 0;
+};
+
 struct GLQueueProfileContext {
 	bool enabled;
 	double cpuStartTime;
@@ -61,6 +87,8 @@ struct GLFrameData {
 
 	GLDeleter deleter;
 	GLDeleter deleter_prev;
+	// Recording thread only.
+	GLUploadArena upload;
 	// Render thread only.
 	std::set<GLPushBuffer *> activePushBuffers;
 

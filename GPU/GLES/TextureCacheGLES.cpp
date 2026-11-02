@@ -296,7 +296,12 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 				dataSize = stride * mipHeight;
 			}
 
-			data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+			GLRAllocType allocType = GLRAllocType::FRAME;
+			data = render_->AllocUploadData(dataSize);
+			if (!data) {
+				data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+				allocType = GLRAllocType::ALIGNED;
+			}
 			_assert_msg_(data != nullptr, "Failed to allocate aligned memory for texture level %d: %d bytes (%dx%d)", i, (int)dataSize, mipWidth, mipHeight);
 
 			if (!data) {
@@ -307,7 +312,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 			LoadTextureLevel(*entry, data, dataSize, stride, plan, srcLevel, dstFmt, TexDecodeFlags::REVERSE_COLORS);
 
 			// NOTE: TextureImage takes ownership of data, so we don't free it afterwards.
-			render_->TextureImage(entry->textureName, i, mipWidth, mipHeight, 1, dstFmt, data, GLRAllocType::ALIGNED);
+			render_->TextureImage(entry->textureName, i, mipWidth, mipHeight, 1, dstFmt, data, allocType);
 		}
 
 		bool genMips = plan.levelsToCreate > plan.levelsToLoad;
@@ -319,7 +324,12 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 		int levelStride = stride * (plan.h * plan.scaleFactor);
 
 		size_t dataSize = levelStride * plan.depth;
-		u8 *data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+		GLRAllocType allocType = GLRAllocType::FRAME;
+		u8 *data = render_->AllocUploadData(dataSize);
+		if (!data) {
+			data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+			allocType = GLRAllocType::ALIGNED;
+		}
 		_assert_msg_(data != nullptr, "Failed to allocate aligned memory for 3d texture: %d bytes", (int)dataSize);
 		if (!data) {
 			ERROR_LOG(Log::G3D, "Ran out of RAM trying to allocate a temporary 3D texture upload buffer (%dx%dx%d)", plan.w, plan.h, plan.depth);
@@ -334,7 +344,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 			p += levelStride;
 		}
 
-		render_->TextureImage(entry->textureName, 0, plan.w * plan.scaleFactor, plan.h * plan.scaleFactor, plan.depth, dstFmt, data, GLRAllocType::ALIGNED);
+		render_->TextureImage(entry->textureName, 0, plan.w * plan.scaleFactor, plan.h * plan.scaleFactor, plan.depth, dstFmt, data, allocType);
 
 		render_->FinalizeTexture(entry->textureName, 1, false);
 	}

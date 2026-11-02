@@ -64,6 +64,8 @@ enum class GLRAllocType : uint8_t {
 	NONE,
 	NEW,
 	ALIGNED,
+	// From the frame's GLUploadArena: not freed by the step.
+	FRAME,
 };
 
 class GLRShader;

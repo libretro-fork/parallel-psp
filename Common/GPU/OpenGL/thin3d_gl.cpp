@@ -902,11 +902,17 @@ void OpenGLTexture::UpdateTextureRegions(GLRenderManager *render, int level, con
 		const int dstStride = region.w * pixelSize;
 		// glTexSubImage2D could take the stride through GL_UNPACK_ROW_LENGTH, but that's not in GLES2,
 		// and the queue runner owns the data anyway, so just pack it here.
-		uint8_t *texData = new uint8_t[(size_t)dstStride * region.h];
+		const size_t texBytes = (size_t)dstStride * region.h;
+		GLRAllocType allocType = GLRAllocType::FRAME;
+		uint8_t *texData = render->AllocUploadData(texBytes);
+		if (!texData) {
+			texData = new uint8_t[texBytes];
+			allocType = GLRAllocType::NEW;
+		}
 		for (int y = 0; y < region.h; y++) {
 			memcpy(texData + (size_t)dstStride * y, region.data + (size_t)srcStride * y, dstStride);
 		}
-		render->TextureSubImageInit(tex_, level, region.x, region.y, region.w, region.h, format_, texData);
+		render->TextureSubImageInit(tex_, level, region.x, region.y, region.w, region.h, format_, texData, allocType);
 	}
 }
 
@@ -945,7 +951,13 @@ void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int
 
 	size_t alignment = DataFormatSizeInBytes(format_);
 	// Make a copy of data with stride eliminated.
-	uint8_t *texData = new uint8_t[(size_t)(width * height * depth * alignment)];
+	const size_t texBytes = (size_t)width * height * depth * alignment;
+	GLRAllocType allocType = GLRAllocType::FRAME;
+	uint8_t *texData = render_->AllocUploadData(texBytes);
+	if (!texData) {
+		texData = new uint8_t[texBytes];
+		allocType = GLRAllocType::NEW;
+	}
 
 	bool texDataPopulated = false;
 	if (initDataCallback) {
@@ -970,7 +982,7 @@ void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int
 		}
 	}
 
-	render_->TextureImage(tex_, level, width, height, depth, format_, texData);
+	render_->TextureImage(tex_, level, width, height, depth, format_, texData, allocType);
 }
 
 #ifdef DEBUG_READ_PIXELS

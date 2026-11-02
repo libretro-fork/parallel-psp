@@ -467,6 +467,8 @@ void GLRenderManager::BeginFrame(bool enableProfiling) {
 	// The render thread may still be presenting this frame slot's last use.
 	ParkingLotWait(&frameData.readyForFence, [&] { return retro_atomic_load_acquire_int(&frameData.readyForFence) != 0; });
 	retro_atomic_store_relaxed_int(&frameData.readyForFence, 0);
+	// The render thread ran every upload of this slot's last use before presenting it.
+	frameData.upload.Reset();
 
 	frameData.frameId = frameIdGen_;
 	frameData.profile.enabled = enableProfiling;

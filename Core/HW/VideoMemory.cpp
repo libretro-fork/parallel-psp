@@ -21,6 +21,13 @@
 VideoMemory::VideoMemory(Protect protect, void *context, uint32_t pageSize)
 	: protect_(protect), context_(context), pageSize_(pageSize) {}
 
+bool VideoMemory::SetPageSize(uint32_t pageSize) {
+	if (count_ || !pageSize || (pageSize & (pageSize - 1)))
+		return false;
+	pageSize_ = pageSize;
+	return true;
+}
+
 uint32_t VideoMemory::CanonicalAddress(uint32_t address) {
 	address &= 0x3FFFFFFF;
 	if ((address & 0x3F800000) == 0x04000000)

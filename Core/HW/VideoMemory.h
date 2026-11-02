@@ -37,6 +37,9 @@ public:
 	bool Contains(uint32_t address, uint32_t size) const;
 	bool ContainsOwner(void *owner) const;
 	size_t Count() const { return count_; }
+	// The protection granularity, a power of two; only while nothing is tracked.
+	bool SetPageSize(uint32_t pageSize);
+	uint32_t PageSize() const { return pageSize_; }
 	static uint32_t CanonicalAddress(uint32_t address);
 
 private:
@@ -53,6 +56,8 @@ private:
 	uint32_t pageSize_;
 };
 
+// The host's page size, or for tests a larger one to protect with: 0 for the host's own.
+extern uint32_t g_videoMemoryPageSizeOverride;
 bool CanDeferVideoMemory();
 bool TrackVideoMemory(uint32_t address, uint32_t size, void *owner, VideoMemory::Materialize materialize);
 bool ResolveVideoMemory(uint32_t address, uint32_t size);

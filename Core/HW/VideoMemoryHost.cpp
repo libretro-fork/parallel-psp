@@ -28,6 +28,7 @@
 #if PPSSPP_VIDEO_MEMORY_FAULTS
 retro_atomic_int_t g_videoMemoryPending;
 #endif
+uint32_t g_videoMemoryPageSizeOverride;
 
 namespace Memory {
 bool ProtectVideoPages(uint32_t address, uint32_t size, bool protect);
@@ -39,6 +40,15 @@ bool Protect(void *, uint32_t address, uint32_t size, bool protect) {
 	return Memory::ProtectVideoPages(address, size, protect);
 }
 VideoMemory pending(Protect, nullptr, 4096);
+
+// Pages up to 64 KiB: 4 KiB on most systems, 16 KiB on Apple silicon and some Android devices.
+// A bigger page only means an access next to a video buffer fills it sooner.
+bool UsePageSize(uint32_t hostPageSize) {
+	const uint32_t size = g_videoMemoryPageSizeOverride ? g_videoMemoryPageSizeOverride : hostPageSize;
+	if (size < 4096 || size > 65536 || (size & (size - 1)) || size % hostPageSize)
+		return false;
+	return pending.PageSize() == size || pending.SetPageSize(size);
+}
 void PublishPending() {
 #if PPSSPP_VIDEO_MEMORY_FAULTS
 	retro_atomic_store_release_int(&g_videoMemoryPending, pending.Count() != 0);
@@ -126,14 +136,14 @@ bool CanDeferVideoMemory() {
 	if (!Memory::IsActive()) return false;
 	SYSTEM_INFO info{};
 	GetSystemInfo(&info);
-	if (info.dwPageSize != 4096) return false;
+	if (!UsePageSize(info.dwPageSize)) return false;
 	if (!exceptionHandler) {
 		ownerThread = GetCurrentThreadId();
 		exceptionHandler = AddVectoredExceptionHandler(TRUE, VideoAccess);
 	}
 	return exceptionHandler && ownerThread == GetCurrentThreadId();
 #elif PPSSPP_VIDEO_MEMORY_FAULTS
-	if (!Memory::IsActive() || sysconf(_SC_PAGESIZE) != 4096) return false;
+	if (!Memory::IsActive() || !UsePageSize((uint32_t)sysconf(_SC_PAGESIZE))) return false;
 	// Again if something went in front of it, or took it out, since.
 	if (!installed || !Current(SIGSEGV)) {
 		struct sigaction sa{};

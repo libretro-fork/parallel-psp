@@ -589,7 +589,7 @@ void MediaEngine::dropOldestPts() {
 
 bool MediaEngine::frameDecoded(int videoPixelMode, bool skipFrame) {
 	Draw::Texture *surface = nullptr;
-	Draw::DrawContext *draw = gpu ? gpu->GetDrawContext() : nullptr;
+	Draw::DrawContext *draw = gpu ? gpu->GetVideoDrawContext() : nullptr;
 	if (!skipFrame && videoPixelMode == GE_CMODE_32BIT_ABGR8888 && draw && draw->SupportsVideoImport() && CanDeferVideoMemory()) {
 		video_hw_frame_t exported{};
 		if (m_avc->ExportGpuFrame(&exported)) {

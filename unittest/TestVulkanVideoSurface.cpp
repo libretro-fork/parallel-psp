@@ -294,6 +294,21 @@ bool TestVulkanVideoSurface() {
 		ClearTiledVideoSurfaces();
 		tiled->Release();
 		printf("Video surfaces: GPU replacements avoid readback; RGB/YUV RAM aliases, CPU writes, padding and between-frame materialization pass\n");
+		EXPECT_TRUE(gpu->GetVideoDrawContext() == context.draw);
+		gpu->EndHostFrame();
+		GPU_Shutdown();
 	}
+	// The software renderer, on the same draw context, keeps video in RAM: it reads textures on its
+	// worker threads, where a page left to the GPU can't be filled. Taking frames to the GPU for it
+	// crashed games once their intro video played.
+	if (gpu) {
+		gpu->EndHostFrame();
+		GPU_Shutdown();
+	}
+	EXPECT_TRUE(GPU_Init(GPUCORE_SOFTWARE, &context, context.draw));
+	gpu->FinishInitOnMainThread();
+	EXPECT_TRUE(!gpu->GetVideoDrawContext());
+	EXPECT_TRUE(gpu->GetDrawContext() == context.draw);
+	GPU_Shutdown();
 	return true;
 }

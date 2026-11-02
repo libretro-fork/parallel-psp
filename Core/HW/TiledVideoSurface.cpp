@@ -144,7 +144,7 @@ bool RememberTiledVideoSurface(Draw::Texture *texture, const u32 buffers[8], int
 }
 
 bool DeferTiledVideoFrame(AvcDecoder &decoder, const u32 buffers[8], int width, int height) {
-	Draw::DrawContext *draw = gpu ? gpu->GetDrawContext() : nullptr;
+	Draw::DrawContext *draw = gpu ? gpu->GetVideoDrawContext() : nullptr;
 	if (!draw || !draw->SupportsVideoImport() || !CanDeferVideoMemory()) {
 		static bool reported = false;
 		if (!reported) { INFO_LOG(Log::ME, "GPU surface prerequisites unavailable (draw=%p, import=%d, memory=%d)", (void *)draw, draw && draw->SupportsVideoImport(), CanDeferVideoMemory()); reported = true; }

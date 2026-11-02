@@ -84,6 +84,12 @@ public:
 	Draw::DrawContext *GetDrawContext() {
 		return draw_;
 	}
+	// The draw context decoded video may stay on as a texture: a hardware renderer's only. The
+	// software renderer reads every texel from RAM, on its worker threads too, where a page left
+	// to the GPU can't be filled.
+	Draw::DrawContext *GetVideoDrawContext() {
+		return GetFramebufferManagerCommon() ? draw_ : nullptr;
+	}
 
 	virtual void DeviceLost() = 0;
 	virtual void DeviceRestore(Draw::DrawContext *draw) = 0;

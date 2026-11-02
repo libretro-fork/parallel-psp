@@ -51,6 +51,21 @@ inline float ProductToFloat24(double d) {
 	return (float)d;
 }
 
+// ldexpf((float)q, k) for 0 <= q < 2^24: the exponent field moved by k while the result stays
+// normal, which is exactly what ldexpf gives. Only the denormal and overflow ends take the libm
+// call, which costs as much as the rest of a reciprocal.
+inline float GEScaleInt(int32_t q, int k) {
+	float f = (float)q;
+	uint32_t bits;
+	memcpy(&bits, &f, sizeof(bits));
+	const int exp = (int)((bits >> 23) & 0xFF) + k;
+	if (q <= 0 || exp < 1 || exp > 254)
+		return ldexpf(f, k);
+	bits = (bits & ~(0xFFu << 23)) | ((uint32_t)exp << 23);
+	memcpy(&f, &bits, sizeof(f));
+	return f;
+}
+
 // The GE's reciprocal and reciprocal square root (TransformUnit, depth, UVs, lighting).
 float GERecip(float w);
 float GERsqrt(float d);

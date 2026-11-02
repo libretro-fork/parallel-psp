@@ -53,7 +53,7 @@ float GERecip(float w) {
 	const int e = (int)((bits >> 23) & 0xFF) - 127;  // |w| = 1.i * 2^e
 	const GERecipSegment &seg = geRecipSegments[i >> 8];
 	const int32_t q = (64 * seg.b + 63 + seg.m * (int32_t)(i & 255)) >> 7;  // 1 / 1.i in units of 2^-16
-	return copysign(ldexpf((float)q, -16 - e), w);
+	return copysign(GEScaleInt(q, -16 - e), w);
 }
 
 // The GE's reciprocal square root (gpu/probe exp69, bit exact): for d = 1.i * 2^E, segment i >> 8 of the
@@ -106,7 +106,7 @@ float GERsqrt(float d) {
 	const int e = (int)((bits >> 23) & 0xFF) - 127;
 	const GERecipSegment &seg = geRsqrtSegments[e & 1][i >> 8];
 	const int32_t q = (64 * seg.b + 63 + seg.m * (int32_t)(i & 255)) >> 7;
-	return ldexpf((float)q, -16 - (e >> 1));
+	return GEScaleInt(q, -16 - (e >> 1));
 }
 
 float GEAddFloat24(float a, float b) {

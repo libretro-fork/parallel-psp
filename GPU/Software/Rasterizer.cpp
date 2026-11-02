@@ -1091,6 +1091,10 @@ static Vec4<int> ColorFromPlanes(const DepthPlane *planes, int64_t x, int64_t y)
 struct UVPlanes {
 	DepthPlane s, t, q;
 	int shiftS, shiftT, shiftQ;
+	// 2^-shift: a plane value times this is std::ldexp(value, -shift) to the bit, since scaling by
+	// a power of two is exact (the shifts keep it far from the denormals), without the libm call
+	// per pixel.
+	double scaleS, scaleT, scaleQ;
 	bool valid;
 };
 
@@ -1132,6 +1136,9 @@ static UVPlanes ComputeUVPlanesSTQ(const int64_t X[3], const int64_t Y[3], const
 	planes.shiftS = SharedShift(s);
 	planes.shiftT = SharedShift(t);
 	planes.shiftQ = SharedShift(q);
+	planes.scaleS = std::ldexp(1.0, -planes.shiftS);
+	planes.scaleT = std::ldexp(1.0, -planes.shiftT);
+	planes.scaleQ = std::ldexp(1.0, -planes.shiftQ);
 	planes.s = FixedPlane(X, Y, s, planes.shiftS);
 	planes.t = FixedPlane(X, Y, t, planes.shiftT);
 	planes.q = FixedPlane(X, Y, q, planes.shiftQ);
@@ -1190,7 +1197,7 @@ static inline Vec4<float> LodQFromPlanes(const UVPlanes &planes, int64_t centerX
 			}
 		}
 		const int64_t x = centerX + (pick - quadX) * SCREEN_SCALE_FACTOR;
-		q[i] = TruncateToFloat24((float)std::ldexp((double)planes.q.At(x, y), -planes.shiftQ));
+		q[i] = TruncateToFloat24((float)((double)planes.q.At(x, y) * planes.scaleQ));
 	}
 	return q;
 }
@@ -1198,7 +1205,7 @@ static inline Vec4<float> LodQFromPlanes(const UVPlanes &planes, int64_t centerX
 static inline void GetTextureCoordinatesGE(const UVPlanes &planes, int64_t centerX, int64_t centerY, Vec4<float> &s, Vec4<float> &t, Vec4<float> &qOut) {
 	for (int i = 0; i < 4; ++i) {
 		const int64_t x = centerX + (i & 1) * SCREEN_SCALE_FACTOR, y = centerY + (i >> 1) * SCREEN_SCALE_FACTOR;
-		const float q = TruncateToFloat24((float)std::ldexp((double)planes.q.At(x, y), -planes.shiftQ));
+		const float q = TruncateToFloat24((float)((double)planes.q.At(x, y) * planes.scaleQ));
 		qOut[i] = q;
 		if (!(q > 0.0f)) {
 			s[i] = 0.0f;
@@ -1206,8 +1213,8 @@ static inline void GetTextureCoordinatesGE(const UVPlanes &planes, int64_t cente
 			continue;
 		}
 		const double r = GERecip(q);
-		s[i] = GEUVProduct((double)TruncateToFloat24((float)std::ldexp((double)planes.s.At(x, y), -planes.shiftS)) * r);
-		t[i] = GEUVProduct((double)TruncateToFloat24((float)std::ldexp((double)planes.t.At(x, y), -planes.shiftT)) * r);
+		s[i] = GEUVProduct((double)TruncateToFloat24((float)((double)planes.s.At(x, y) * planes.scaleS)) * r);
+		t[i] = GEUVProduct((double)TruncateToFloat24((float)((double)planes.t.At(x, y) * planes.scaleT)) * r);
 	}
 }
 

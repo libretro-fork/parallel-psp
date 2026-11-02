@@ -55,6 +55,38 @@ public:
 	}
 	PSPAudioType GetAudioType() const override { return PSP_CODEC_AAC; }
 
+	// The decoder opens at its first frame, from it, so the state says how it was opened.
+	struct StateHeader {
+		s32 channels;
+		u16 asc;
+		u8 open;
+		u8 pad;
+	};
+	size_t StateSize() const override {
+		return sizeof(StateHeader) + (dec_ ? raac_state_size(dec_) : 0);
+	}
+	void SaveState(uint8_t *data) const override {
+		StateHeader h{ channels_, asc_, (u8)(dec_ != nullptr), 0 };
+		memcpy(data, &h, sizeof(h));
+		if (dec_)
+			raac_save_state(dec_, data + sizeof(h));
+	}
+	bool LoadState(const uint8_t *data, size_t size) override {
+		StateHeader h;
+		if (size < sizeof(h))
+			return false;
+		memcpy(&h, data, sizeof(h));
+		channels_ = h.channels;
+		if (!h.open) {
+			if (dec_)
+				raac_close(dec_);
+			dec_ = nullptr;
+			asc_ = h.asc;
+			return size == sizeof(h);
+		}
+		return Open(h.asc) && raac_load_state(dec_, data + sizeof(h), size - sizeof(h)) == 0;
+	}
+
 private:
 	// The AudioSpecificConfig the decoder was opened with.
 	bool Open(uint16_t asc);

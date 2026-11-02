@@ -105,8 +105,10 @@ private:
 
 	// The program stream, fed from the ring a pack at a time; false when the ring has nothing.
 	bool demuxMore();
-	// The next whole access unit of the selected video stream, into unit/pts.
-	bool takeAccessUnit(bool streamEnded, std::vector<u8> &unit, s64 *pts);
+	// The next whole access unit of the selected video stream, where it lies in m_au: valid
+	// until the next demuxMore().
+	bool takeAccessUnit(bool streamEnded, const u8 **unit, size_t *size, s64 *pts);
+	size_t auSize() const { return m_au.size() - m_auHead; }
 	// A decoded frame: the time it stands for, and its pixels unless skipped.
 	bool frameDecoded(int videoPixelMode, bool skipFrame);
 	// Whether the whole program stream the header promised has gone to the demuxer.
@@ -139,8 +141,11 @@ private:
 	Draw::Texture *m_gpuVideoFrame = nullptr;
 	bool m_cpuFrameReady = true;
 	bool m_gpuVideoWrite = false;
+	// The stream's bytes from m_auHead on; what is before it was taken, and goes when demuxMore
+	// next appends, so a unit is decoded where it lies and the rest moved once, not per unit.
 	std::vector<u8> m_au;
-	std::vector<u8> m_decodeUnit;  // Keep input stable across hardware backpressure.
+	size_t m_auHead = 0;
+	std::vector<u8> m_decodeUnit;  // A unit kept stable across hardware backpressure.
 	bool m_retryDecode = false;
 	bool m_videoBusy = false;
 	s64 m_retryPts = -1;
@@ -171,11 +176,12 @@ private:
 	s64 m_audiopts = 0;
 
 	// used for audio type 
-	int m_audioType;
+	int m_audioType = 0;
 
-	int m_ringbuffersize;
+	int m_ringbuffersize = 0;
 
-	u8 m_mpegheader[0x10000];  // TODO: Allocate separately
+	// Saved whole, so zeroed past what a header fills in rather than holding whatever the heap had.
+	u8 m_mpegheader[0x10000]{};  // TODO: Allocate separately
 	int m_mpegheaderReadPos = 0;
 	int m_mpegheaderSize = 0;
 };

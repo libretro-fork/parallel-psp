@@ -1660,7 +1660,7 @@ struct DisplayList_v2 {
 };
 
 void GPUCommon::DoState(PointerWrap &p) {
-	auto s = p.Section("GPUCommon", 1, 7);
+	auto s = p.Section("GPUCommon", 1, 8);
 	if (!s)
 		return;
 
@@ -1743,7 +1743,8 @@ void GPUCommon::DoState(PointerWrap &p) {
 			p.SetError(p.ERROR_FAILURE);
 			return;
 		}
-		// Video frames aren't saved, and the ones before the load are no longer in memory.
+		// Before version 8 the video ranges weren't saved, and the ones before the load are no
+		// longer in memory.
 		videos_.clear();
 	}
 	// List 0 looks the same as no list here, but no list means an empty queue.
@@ -1763,6 +1764,26 @@ void GPUCommon::DoState(PointerWrap &p) {
 	}
 	if (s >= 6) {
 		Do(p, edramTranslation_);
+	}
+	// Where video frames are: drawing from there costs GE time (EstimateFillCycles), so the
+	// display lists after a load take as long as they would have. Ages, not flip numbers, which
+	// count from the host session.
+	if (s >= 8) {
+		u32 count = (u32)videos_.size();
+		Do(p, count);
+		if (p.mode == PointerWrap::MODE_READ && (count > 256 || !p.CheckRead((size_t)count * 12))) {
+			p.SetError(PointerWrap::ERROR_FAILURE);
+			return;
+		}
+		if (p.mode == PointerWrap::MODE_READ)
+			videos_.resize(count);
+		for (VideoInfo &info : videos_) {
+			s32 age = gpuStats.totals.numFlips - info.flips;
+			Do(p, info.addr);
+			Do(p, info.size);
+			Do(p, age);
+			info.flips = gpuStats.totals.numFlips - age;
+		}
 	}
 }
 

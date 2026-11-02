@@ -94,34 +94,36 @@ struct MpegContext {
 	void DoState(PointerWrap &p);
 
 	u8 mpegheader[2048];
-	u32 defaultFrameWidth;
-	int videoFrameCount;
-	int audioFrameCount;
-	bool endOfAudioReached;
-	bool endOfVideoReached;
-	int videoPixelMode;
-	u32 mpegMagic;
-	int mpegVersion;
-	u32 mpegRawVersion;
-	u32 mpegOffset;
-	u32 mpegStreamSize;
-	s64 mpegFirstTimestamp;
-	s64 mpegLastTimestamp;
-	u32 mpegFirstDate;
-	u32 mpegLastDate;
-	u32 mpegRingbufferAddr;
-	int mpegwarmUp;
-	bool esBuffers[MPEG_DATA_ES_BUFFERS];
-	AvcContext avc;
+	// Everything starts zeroed: a context is saved whole before the stream analysis fills it in,
+	// and what's saved has to be the same every time.
+	u32 defaultFrameWidth = 0;
+	int videoFrameCount = 0;
+	int audioFrameCount = 0;
+	bool endOfAudioReached = false;
+	bool endOfVideoReached = false;
+	int videoPixelMode = 0;
+	u32 mpegMagic = 0;
+	int mpegVersion = 0;
+	u32 mpegRawVersion = 0;
+	u32 mpegOffset = 0;
+	u32 mpegStreamSize = 0;
+	s64 mpegFirstTimestamp = 0;
+	s64 mpegLastTimestamp = 0;
+	u32 mpegFirstDate = 0;
+	u32 mpegLastDate = 0;
+	u32 mpegRingbufferAddr = 0;
+	int mpegwarmUp = 0;
+	bool esBuffers[MPEG_DATA_ES_BUFFERS]{};
+	AvcContext avc{};
 
-	bool avcRegistered;
-	bool atracRegistered;
-	bool pcmRegistered;
-	bool dataRegistered;
+	bool avcRegistered = false;
+	bool atracRegistered = false;
+	bool pcmRegistered = false;
+	bool dataRegistered = false;
 
-	bool ignoreAtrac;
-	bool ignorePcm;
-	bool ignoreAvc;
+	bool ignoreAtrac = false;
+	bool ignorePcm = false;
+	bool ignoreAvc = false;
 
 	bool isAnalyzed = false;
 	bool ringbufferNeedsReverse = false;

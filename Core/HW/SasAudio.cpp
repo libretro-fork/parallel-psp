@@ -203,6 +203,7 @@ int SasAtrac3::SetContext(u32 contextAddr) {
 
 void SasAtrac3::GetNextSamples(s16 *outbuf, int wantedSamples) {
 	if (atracID_ < 0) {
+		memset(outbuf, 0, wantedSamples * sizeof(s16));
 		end_ = true;
 		return;
 	}
@@ -221,7 +222,11 @@ void SasAtrac3::GetNextSamples(s16 *outbuf, int wantedSamples) {
 		else
 			finish = 1;
 	}
-	sampleQueue_->pop_front((u8*)outbuf, wantedbytes);
+	// Past the end of the data is silence, as for PCM and VAG voices - not whatever the mixer's
+	// buffer last held, which a savestate doesn't carry.
+	const int got = sampleQueue_->pop_front((u8*)outbuf, wantedbytes);
+	if (got < wantedbytes)
+		memset((u8 *)outbuf + got, 0, wantedbytes - got);
 	end_ = finish == 1;
 }
 

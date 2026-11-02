@@ -126,8 +126,7 @@ static void MEEnsureRam() {
 	}
 }
 
-// When the Media Engine finishes the last job it was given. Not serialized: after a load it's
-// simply free.
+// When the Media Engine finishes the last job it was given, on the global clock.
 static s64 g_meBusyUntilUs;
 
 int MEScheduleJob(int us) {
@@ -195,11 +194,12 @@ void __VideocodecDoState(PointerWrap &p) {
 		return;
 	}
 	if (p.mode == p.MODE_READ) {
-		// Not serialized, and the clock it was measured against just moved (maybe backwards).
+		// States before version 2 don't have it, and the clock it was measured against just
+		// moved (maybe backwards): free.
 		g_meBusyUntilUs = 0;
 	}
 
-	auto s = p.Section("sceVideocodec", 0, 1);
+	auto s = p.Section("sceVideocodec", 0, 2);
 	if (!s) {
 		if (p.mode == p.MODE_READ) {
 			// A state from before this module. Don't keep the contexts and ME memory of the session
@@ -212,13 +212,9 @@ void __VideocodecDoState(PointerWrap &p) {
 		return;
 	}
 
-	// The decoders themselves aren't serializable - a savestate resumes with fresh ones, which
-	// costs at most the frames up to the next keyframe. The frame buffer allocations do have to
-	// come back, or we'd lose track of memory the restored allocator still has handed out.
-	//
-	// If we in the future directly integrate with a h.264 decoder, it might be actually possible
-	// to serialize the internal states. But 100% accurate savestates during cutscene playback are
-	// not really that important.
+	// The frame buffer allocations have to come back, or we'd lose track of memory the restored
+	// allocator still has handed out. From version 2 the decoders' pictures come back too; before
+	// that a load resumes with fresh decoders, up to the next keyframe.
 	int count = (int)g_videocodecCtxs.size();
 	Do(p, count);
 	if (p.mode == p.MODE_READ) {
@@ -234,6 +230,14 @@ void __VideocodecDoState(PointerWrap &p) {
 			Do(p, ctx.frameBufferWidth);
 			Do(p, ctx.frameBufferHeight);
 			Do(p, ctx.edram);
+			if (s >= 2) {
+				// Only a context that had one gets a decoder back; one without makes it at decode.
+				u8 hasDecoder = 0;
+				Do(p, hasDecoder);
+				if (hasDecoder)
+					ctx.decoder = new AvcDecoder();
+				DoAvcDecoderState(p, ctx.decoder);
+			}
 			g_videocodecCtxs[addr] = std::move(ctx);
 		}
 	} else {
@@ -247,8 +251,16 @@ void __VideocodecDoState(PointerWrap &p) {
 			Do(p, ctx.frameBufferWidth);
 			Do(p, ctx.frameBufferHeight);
 			Do(p, ctx.edram);
+			if (s >= 2) {
+				u8 hasDecoder = ctx.decoder != nullptr;
+				Do(p, hasDecoder);
+				DoAvcDecoderState(p, ctx.decoder);
+			}
 		}
 	}
+	// When the ME is free again: the next job's delay, and so when its caller wakes, depends on it.
+	if (s >= 2)
+		Do(p, g_meBusyUntilUs);
 
 	// The Media Engine's memory and who holds what of it. Empty until a video plays, and then it
 	// is the one copy - the contexts above only carry addresses into it.

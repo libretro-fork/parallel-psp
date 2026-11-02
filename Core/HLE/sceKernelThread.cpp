@@ -857,7 +857,7 @@ void __KernelThreadingDoState(PointerWrap &p)
 		g_exitCallbackPending = false;
 	}
 
-	auto s = p.Section("sceKernelThread", 1, 7);
+	auto s = p.Section("sceKernelThread", 1, 8);
 	if (!s)
 		return;
 
@@ -933,12 +933,12 @@ void __KernelThreadingDoState(PointerWrap &p)
 	if (s >= 3)
 		Do(p, pendingDeleteThreads);
 
-	if (p.mode == p.MODE_READ) {
-		// Re-base rather than serialize, so a state saved before this existed doesn't bill one
-		// thread for the entire emulated time up to the save. Only on load: saving runs a measure
-		// pass and then a write pass, and re-basing in either would throw away the time the
-		// running thread had accumulated since the last switch - a save must not change what the
-		// game can observe.
+	// When the running thread was switched in: its runForClocks goes on from there. A state from
+	// before version 8 re-bases instead, so the thread isn't billed for all the emulated time up
+	// to the save.
+	if (s >= 8) {
+		Do(p, lastContextSwitchUs);
+	} else if (p.mode == p.MODE_READ) {
 		lastContextSwitchUs = CoreTiming::GetGlobalTimeUs();
 	}
 }

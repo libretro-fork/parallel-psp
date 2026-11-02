@@ -35,7 +35,8 @@ struct BufferQueue {
 	bool alloc(int size) {
 		_assert_(size > 0);
 		delete [] bufQueue;
-		bufQueue = new unsigned char[size];
+		// Zeroed: the whole buffer goes into savestates, and they have to be the same every time.
+		bufQueue = new unsigned char[size]();
 		bufQueueSize = size;
 		clear();
 		return true;

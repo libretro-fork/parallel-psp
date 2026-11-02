@@ -155,7 +155,7 @@ void MediaEngine::DoState(PointerWrap &p) {
 	}
 
 	Do(p, m_isVideoEnd);
-	bool noAudioDataRemoved;
+	bool noAudioDataRemoved = false;  // unused since, but still in the format
 	Do(p, noAudioDataRemoved);
 	if (s >= 3) {
 		Do(p, m_audioType);
@@ -188,7 +188,18 @@ void MediaEngine::DoVideoState(PointerWrap &p, bool open) {
 		}
 		packEnds.assign(m_packEnds.begin(), m_packEnds.end());
 	}
-	Do(p, m_au);
+	// The bytes not yet taken, as a vector of them.
+	u32 auBytes = (u32)auSize();
+	Do(p, auBytes);
+	if (p.mode == PointerWrap::MODE_READ) {
+		if (!p.CheckRead(auBytes))
+			return;
+		m_au.assign(*p.ptr, *p.ptr + auBytes);
+		m_auHead = 0;
+		p.SkipBytes(auBytes);
+	} else if (auBytes) {
+		DoArray(p, m_au.data() + m_auHead, auBytes);
+	}
 	Do(p, m_decodeUnit);
 	Do(p, m_retryDecode);
 	Do(p, m_retryPts);
@@ -203,24 +214,13 @@ void MediaEngine::DoVideoState(PointerWrap &p, bool open) {
 	Do(p, m_decodingsize);
 
 	// The decoder: without a state to give (or take) it starts over, as after a seek.
-	u32 size = 0;
-	if (p.mode != PointerWrap::MODE_READ && open && m_avc)
-		size = (u32)m_avc->StateSize();
-	Do(p, size);
-	if (p.mode == PointerWrap::MODE_READ) {
-		if (!p.CheckRead(size))
-			return;
-		if (open && m_avc && size && !m_avc->LoadState(*p.ptr, size))
-			m_avc->Flush();
-	} else if (p.mode == PointerWrap::MODE_WRITE && size) {
-		if (m_avc->SaveState(*p.ptr, size) != size)
-			p.SetError(PointerWrap::ERROR_FAILURE);
-	}
-	p.SkipBytes(size);
+	DoAvcDecoderState(p, open ? m_avc : nullptr);
 
-	// The frame on show, which a game may ask for again before the next one.
+	// The frame on show, which a game may ask for again before the next one. Not one still on the
+	// GPU (a frontend decoder's): reading it back would stall every save, run-ahead's every frame,
+	// and that decoder starts over after a load anyway.
 	u32 frameBytes = 0;
-	if (p.mode != PointerWrap::MODE_READ && m_buffer && ensureFramePixels())
+	if (p.mode != PointerWrap::MODE_READ && m_buffer && m_cpuFrameReady)
 		frameBytes = (u32)((size_t)m_desWidth * m_desHeight * 4);
 	Do(p, m_desWidth);
 	Do(p, m_desHeight);
@@ -464,6 +464,7 @@ bool MediaEngine::streamFed() const {
 
 void MediaEngine::clearUnits() {
 	m_au.clear();
+	m_auHead = 0;
 	m_decodeUnit.clear();
 	m_retryDecode = false;
 	m_videoBusy = false;
@@ -482,6 +483,11 @@ bool MediaEngine::demuxMore() {
 	rpsmf_packet_t pkt;
 	bool any = false;
 
+	// The units taken go now, before anything is appended behind them.
+	if (m_auHead) {
+		m_au.erase(m_au.begin(), m_au.begin() + m_auHead);
+		m_auHead = 0;
+	}
 	for (;;) {
 		while (rpsmf_next(m_psmf, &pkt)) {
 			if (pkt.kind != RPSMF_VIDEO || pkt.stream != (m_videoStreamIds[m_videoStream] & 0x0F))
@@ -505,7 +511,9 @@ bool MediaEngine::demuxMore() {
 		m_decodingsize = got;
 		m_psFed += got;
 		m_packPending = true;
-		if (rpsmf_write(m_psmf, pack, got) != (size_t)got)
+		// Parsed where it lies: the packets the loop above takes point into pack, which stays
+		// as it is until they're all taken.
+		if (rpsmf_borrow(m_psmf, pack, got) != (size_t)got)
 			WARN_LOG(Log::ME, "MediaEngine: demuxer refused program stream bytes");
 	}
 }
@@ -513,25 +521,27 @@ bool MediaEngine::demuxMore() {
 // H.264 network units, gathered into access units by where one must begin (7.4.1.2.3): an
 // access unit delimiter, parameter set or SEI after a slice, or a slice starting at the first
 // macroblock after another slice.
-bool MediaEngine::takeAccessUnit(bool streamEnded, std::vector<u8> &unit, s64 *pts) {
+bool MediaEngine::takeAccessUnit(bool streamEnded, const u8 **unit, size_t *unitSize, s64 *pts) {
+	const u8 *au = m_au.data() + m_auHead;
+	const size_t n = auSize();
 	size_t end = 0;
 	bool found = false;
 	size_t i = m_auScan;
-	while (i + 4 < m_au.size()) {
-		if (m_au[i] != 0 || m_au[i + 1] != 0 || m_au[i + 2] != 1) {
+	while (i + 4 < n) {
+		if (au[i] != 0 || au[i + 1] != 0 || au[i + 2] != 1) {
 			i++;
 			continue;
 		}
-		const int type = m_au[i + 3] & 0x1F;
+		const int type = au[i + 3] & 0x1F;
 		const bool slice = type == 1 || type == 5;
 		if (m_auHasSlice) {
 			bool starts = type == 6 || type == 7 || type == 8 || type == 9 || (type >= 14 && type <= 18);
 			// first_mb_in_slice is ue(v): zero is a single 1 bit.
-			if (slice && (m_au[i + 4] & 0x80))
+			if (slice && (au[i + 4] & 0x80))
 				starts = true;
 			if (starts) {
 				// A four byte start code's leading zero belongs to the next unit.
-				end = (i > 0 && m_au[i - 1] == 0) ? i - 1 : i;
+				end = (i > 0 && au[i - 1] == 0) ? i - 1 : i;
 				found = true;
 				break;
 			}
@@ -545,7 +555,7 @@ bool MediaEngine::takeAccessUnit(bool streamEnded, std::vector<u8> &unit, s64 *p
 		if (!streamEnded || !m_auHasSlice)
 			return false;
 		// The last unit runs to the end of the stream.
-		end = m_au.size();
+		end = n;
 	}
 
 	*pts = -1;
@@ -559,8 +569,9 @@ bool MediaEngine::takeAccessUnit(bool streamEnded, std::vector<u8> &unit, s64 *p
 		}
 	}
 	m_auPts.resize(keep);
-	unit.assign(m_au.begin(), m_au.begin() + end);
-	m_au.erase(m_au.begin(), m_au.begin() + end);
+	*unit = au;
+	*unitSize = end;
+	m_auHead += end;
 	m_auBase += end;
 	size_t used = 0;
 	while (used < m_packEnds.size() && m_packEnds[used] <= m_auBase)
@@ -628,21 +639,27 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 		return false;
 
 	m_videoBusy = false;
-	std::vector<u8> &unit = m_decodeUnit;
 	for (;;) {
 		const bool retry = m_retryDecode;
 		s64 pts = m_retryPts;
 		const bool ended = streamFed();
-		if (retry || takeAccessUnit(ended, unit, &pts)) {
+		const u8 *unit = m_decodeUnit.data();
+		size_t unitSize = m_decodeUnit.size();
+		if (retry || takeAccessUnit(ended, &unit, &unitSize, &pts)) {
 			if (!retry && pts >= 0)
 				m_pendingPts.push_back(pts);
-			const bool gotFrame = m_avc->Decode(unit.data(), (int)unit.size(), true);
+			const bool gotFrame = m_avc->Decode(unit, (int)unitSize, true);
 			m_retryDecode = m_avc->LastResult() == 2;
 			if (m_retryDecode) {
+				// Offered again later, after demuxMore may have moved the stream's bytes.
+				if (!retry)
+					m_decodeUnit.assign(unit, unit + unitSize);
 				m_retryPts = pts;
 				m_videoBusy = true;
 				return false;
 			}
+			if (retry)
+				m_decodeUnit.clear();
 			if (gotFrame) {
 				if (frameDecoded(videoPixelMode, skipFrame))
 					return true;

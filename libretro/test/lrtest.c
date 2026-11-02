@@ -382,7 +382,9 @@ int main(int argc, char **argv)
          save_ns += now_ns() - t0;
          if (ok)
          {
-            if (state_dir)
+            /* LRTEST_STATE_FROM=N: states kept or compared from frame N on */
+            const bool keep = i >= (getenv("LRTEST_STATE_FROM") ? atoi(getenv("LRTEST_STATE_FROM")) : 0);
+            if (state_dir && keep)
             {
                char path[4096];
                FILE *f;
@@ -392,6 +394,37 @@ int main(int argc, char **argv)
                   fwrite(buf, 1, size, f);
                   fclose(f);
                }
+            }
+            /* LRTEST_COMPARE=dir: each state against the one another run saved
+             * at the same frame there, past the SaveStart header's counter. */
+            if (getenv("LRTEST_COMPARE") && keep)
+            {
+               char path[4096];
+               FILE *f;
+               size_t off = 32;
+               unsigned char *other = NULL;
+               snprintf(path, sizeof(path), "%s/state%05d.bin", getenv("LRTEST_COMPARE"), i);
+               if ((f = fopen(path, "rb")) && !fseek(f, 0, SEEK_END) && ftell(f) == (long)size
+                     && !fseek(f, 0, SEEK_SET) && (other = (unsigned char *)malloc(size))
+                     && fread(other, 1, size, f) == size)
+               {
+                  while (off < size && other[off] == ((unsigned char *)buf)[off])
+                     off++;
+                  if (off < size)
+                  {
+                     state_errors++;
+                     printf("FAIL: frame %d: state differs from %s at offset %zu (%s)\n",
+                           i, path, off, section_before((const unsigned char *)buf, off));
+                  }
+               }
+               else
+               {
+                  state_errors++;
+                  printf("FAIL: frame %d: no state of size %zu in %s\n", i, size, path);
+               }
+               free(other);
+               if (f)
+                  fclose(f);
             }
             t0 = now_ns();
             if (!getenv("LRTEST_SAVE_ONLY"))

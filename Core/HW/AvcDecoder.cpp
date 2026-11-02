@@ -18,6 +18,7 @@
 #include "ppsspp_config.h"
 
 #include "Common/Log.h"
+#include "Common/Serialize/SerializeFuncs.h"
 #include "Core/HW/AvcDecoder.h"
 
 #include <climits>
@@ -81,6 +82,23 @@ bool AvcDecoder::LoadState(const u8 *data, size_t size) {
 	pendingPlanes_ = false;
 	lastResult_ = 0;
 	return dec_ && rh264_video_load_state(dec_, data, size) == 0;
+}
+
+void DoAvcDecoderState(PointerWrap &p, AvcDecoder *decoder) {
+	u32 size = 0;
+	if (p.mode != PointerWrap::MODE_READ && decoder)
+		size = (u32)decoder->StateSize();
+	Do(p, size);
+	if (p.mode == PointerWrap::MODE_READ) {
+		if (!p.CheckRead(size))
+			return;
+		if (decoder && (!size || !decoder->LoadState(*p.ptr, size)))
+			decoder->Flush();
+	} else if (p.mode == PointerWrap::MODE_WRITE && size) {
+		if (decoder->SaveState(*p.ptr, size) != size)
+			p.SetError(PointerWrap::ERROR_FAILURE);
+	}
+	p.SkipBytes(size);
 }
 
 bool AvcDecoder::IsAvailable() {

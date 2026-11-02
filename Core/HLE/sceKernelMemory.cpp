@@ -437,6 +437,18 @@ BlockAllocator *BlockAllocatorFromID(int id) {
 	return nullptr;
 }
 
+// The allocator BlockAllocatorToID named, whoever is asking: a savestate restores the partition
+// a block was in, which the caller's privilege has nothing to do with - and while it loads, the
+// thread that would be asked about may already be gone.
+static BlockAllocator *BlockAllocatorFromSavedID(int id) {
+	switch (id) {
+	case KERNEL_PARTITION_ID: return &kernelMemory;
+	case USER_PARTITION_ID: return &userMemory;
+	case VSHELL_PARTITION_ID: return &volatileMemory;
+	default: return nullptr;
+	}
+}
+
 int BlockAllocatorToID(const BlockAllocator *alloc) {
 	if (alloc == &kernelMemory)
 		return KERNEL_PARTITION_ID;
@@ -832,7 +844,7 @@ public:
 		if (s >= 2) {
 			int allocType = BlockAllocatorToID(alloc);
 			Do(p, allocType);
-			alloc = BlockAllocatorFromID(allocType);
+			alloc = BlockAllocatorFromSavedID(allocType);
 		}
 	}
 

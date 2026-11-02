@@ -114,16 +114,21 @@ static void __SasDrain() {
 	ParkingLotWait(&sasThreadState, [] { return SasState() != SasThreadState::QUEUED; });
 }
 
-static void __SasEnqueueMix(u32 outAddr, u32 inAddr = 0, int leftVol = 0, int rightVol = 0) {
+// Returns what the mix costs on the Media Engine, from the voices as they are before it: a mix
+// running on the SAS thread ends voices, and an estimate taken alongside would depend on how far
+// it had got.
+static int __SasEnqueueMix(u32 outAddr, u32 inAddr = 0, int leftVol = 0, int rightVol = 0) {
 	if (SasState() == SasThreadState::DISABLED) {
 		// No thread, call it immediately.
+		const int mixUs = sas->EstimateMixUs();
 		const bool mute = g_sasMuteFlag;
 		sas->Mix(outAddr, inAddr, leftVol, rightVol, mute);
-		return;
+		return mixUs;
 	}
 
 	// Wait for the last mix, so the params are free to write. No other thread enqueues.
 	__SasDrain();
+	const int mixUs = sas->EstimateMixUs();
 	sasThreadParams.outAddr = outAddr;
 	sasThreadParams.inAddr = inAddr;
 	sasThreadParams.leftVol = leftVol;
@@ -131,6 +136,7 @@ static void __SasEnqueueMix(u32 outAddr, u32 inAddr = 0, int leftVol = 0, int ri
 
 	retro_atomic_store_release_int(&sasThreadState, SasThreadState::QUEUED);
 	sasWork.Notify();
+	return mixUs;
 }
 
 static void __SasDisableThread() {
@@ -254,9 +260,10 @@ static u32 sceSasGetEndFlag(u32 core) {
 	return hleLogVerbose(Log::sceSas, endFlag);
 }
 
-static int delaySasResult(int result) {
+// @mixUs is what __SasEnqueueMix gave for the grain.
+static int delaySasResult(int result, int mixUs) {
 	// The mix runs on the Media Engine, after anything else it's busy with.
-	const int usec = MEScheduleJob(sas->EstimateMixUs());
+	const int usec = MEScheduleJob(mixUs);
 
 	// Nothing can wait in an interrupt handler (the wait would go to the idle thread it runs on.)
 	if (__IsInInterrupt()) {
@@ -284,9 +291,9 @@ static u32 _sceSasCore(u32 core, u32 outAddr) {
 		return hleLogError(Log::sceSas, SCE_KERNEL_ERROR_CAN_NOT_WAIT, "dispatch disabled");
 	}
 
-	__SasEnqueueMix(outAddr);
+	const int mixUs = __SasEnqueueMix(outAddr);
 
-	return hleLogVerbose(Log::sceSas, delaySasResult(0));
+	return hleLogVerbose(Log::sceSas, delaySasResult(0, mixUs));
 }
 
 // Another way of running the mixer, the inoutAddr should be both input and output
@@ -303,9 +310,9 @@ static u32 _sceSasCoreWithMix(u32 core, u32 inoutAddr, int leftVolume, int right
 		return hleLogError(Log::sceSas, SCE_KERNEL_ERROR_CAN_NOT_WAIT, "dispatch disabled");
 	}
 
-	__SasEnqueueMix(inoutAddr, inoutAddr, leftVolume, rightVolume);
+	const int mixUs = __SasEnqueueMix(inoutAddr, inoutAddr, leftVolume, rightVolume);
 
-	return delaySasResult(hleLogVerbose(Log::sceSas, 0));
+	return delaySasResult(hleLogVerbose(Log::sceSas, 0), mixUs);
 }
 
 static u32 sceSasSetVoice(u32 core, int voiceNum, u32 vagAddr, int size, int loop) {

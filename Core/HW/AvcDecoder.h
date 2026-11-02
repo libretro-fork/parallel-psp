@@ -34,6 +34,8 @@ struct retro_video_decode_frame;
 // is a second path in addition to that. Implementing the old path around this might happen later.
 //
 // Output is 8-bit YUV 4:2:0 planes, cropped to the picture shown; the caller converts.
+class PointerWrap;
+
 class AvcDecoder {
 public:
 	AvcDecoder();
@@ -104,3 +106,8 @@ private:
 	int width_ = 0;
 	int height_ = 0;
 };
+
+// The decoder's state as a u32 size and that many bytes. A decoder without a state to give
+// saves 0; one that can't take what was saved (or was given none) starts over, as after a seek.
+// Null saves 0 and skips what a load has.
+void DoAvcDecoderState(PointerWrap &p, AvcDecoder *decoder);

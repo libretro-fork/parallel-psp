@@ -12,6 +12,8 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 "$here/gldelayedtest"
 "$here/mbitest"
 "$here/sasreverbtest"
+"$here/aacstatetest" "$root/pspautotests/tests/audio/audiocodec"
+"$here/metimetest"
 "$here/vkheaptest"
 # The Vulkan heap is C89 for MSVC: no C99 in it.
 cc -std=c89 -ansi -pedantic -Werror=pedantic -Werror=declaration-after-statement -Wno-long-long \
@@ -91,7 +93,7 @@ case "$line" in *FAIL*) echo "FAIL: savestates"; exit 1;; *frames=120*) ;; *) ec
 for t in threads/callbacks/intrnotify threads/callbacks/waittypes threads/scheduling/syscallkinds \
 		gpu/transfer/mirrors gpu/transfer/overlap gpu/ge/edramswizzle cpu/cpu_alu/cpu_alu \
 		audio/atrac/replay audio/mp3/mp3test audio/mp3/stream \
-		video/mpeg/basic video/pmf/pmf video/pmf_simple/pmf_simple; do
+		video/mpeg/basic video/pmf/pmf video/pmf_simple/pmf_simple audio/atrac/sas; do
 	dir="$root/pspautotests/tests/$(dirname "$t")"
 	prx="$root/pspautotests/tests/$t.prx"
 	for every in 0 1; do
@@ -105,6 +107,24 @@ for t in threads/callbacks/intrnotify threads/callbacks/waittypes threads/schedu
 	echo "round trip $t: $res1"
 	case "$res1" in *exit=1*) ;; *) echo "FAIL: $t did not run to its end with savestates"; exit 1;; esac
 	[ "$res0" = "$res1" ] && [ "$printed0" = "$printed1" ] || { echo "FAIL: $t changes across savestate round trips ($res0)"; exit 1; }
+done
+# A load changes nothing the run goes on to save: a run that loads another's state at a frame
+# saves the states that run saved after it, byte for byte. What isn't in the state but decides
+# what happens next - the time the running thread was switched in, where video frames are (the
+# GE time of drawing them), the SAS mixer's buffer, a context's unset fields - shows here.
+for tf in audio/atrac/sas:188 video/pmf/pmf:100 video/mpeg/basic:40 audio/timing/meshare:6; do
+	t=${tf%:*}; at=${tf#*:}
+	dir="$root/pspautotests/tests/$(dirname "$t")"
+	prx="$root/pspautotests/tests/$t.prx"
+	ref=$(mktemp -d); save=$(mktemp -d)
+	(cd "$dir" && LRTEST_STATE_FROM=$at LRTEST_STATE_DIR=$ref LRTEST_SAVE_ONLY=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save \
+		timeout -k 5 300 "$here/lrtest" "$root/libretro/ppsspp_libretro.so" "$prx" $((at + 5)) 1 >/dev/null)
+	line=$(cd "$dir" && LRTEST_LOAD="$at:$ref/state$(printf %05d "$at").bin" LRTEST_STATE_FROM=$((at + 1)) LRTEST_COMPARE=$ref \
+		LRTEST_SAVE_ONLY=1 LRTEST_SYSTEM=$sys LRTEST_SAVE=$save timeout -k 5 300 \
+		"$here/lrtest" "$root/libretro/ppsspp_libretro.so" "$prx" $((at + 5)) 1 | grep -E '^(@@ loaded|FAIL)' | tr '\n' ' ')
+	rm -rf "$ref" "$save"
+	echo "state convergence $t@$at: $line"
+	case "$line" in *FAIL*) echo "FAIL: $t: a load at frame $at changes what is saved after it"; exit 1;; "@@ loaded"*) ;; *) echo "FAIL: $t: no load"; exit 1;; esac
 done
 # Saving straight after a load gives back the state loaded, with video decoding.
 save=$(mktemp -d)

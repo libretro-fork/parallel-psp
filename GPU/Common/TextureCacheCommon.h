@@ -422,6 +422,16 @@ protected:
 	// Unswizzles into tmpTexBuf32_, sized for what the decode will read. bytesPerPixel 0 means
 	// 4-bit indices. Returns the buffer.
 	const u8 *UnswizzleToTemp(const u8 *texptr, int w, int h, int bufw, int bytesPerPixel);
+	// A level's rows. Swizzled ones are unswizzled eight at a time, a band of blocks, into
+	// tmpTexBuf32_, which then stays in cache, rather than the whole level first.
+	struct TexRows {
+		const u8 *base;
+		u32 rowBytes;
+		u8 *band;  // Non-null when swizzled.
+		int bandY;
+		const u8 *Row(int y);
+	};
+	TexRows RowsOf(const u8 *texptr, int w, int h, int bufw, int bytesPerPixel, bool swizzled);
 	TextureAlpha ReadIndexedTex(u8 *out, int outPitch, int w, int h, int level, const u8 *texptr, int bytesPerIndex, int bufw, bool reverseColors, bool expandTo32Bit);
 	ReplacedTexture *FindReplacement(TexCacheEntry *entry, int *w, int *h, int *d);
 	void PollReplacement(TexCacheEntry *entry, int *w, int *h, int *d);

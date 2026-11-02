@@ -1990,6 +1990,30 @@ const u8 *TextureCacheCommon::UnswizzleToTemp(const u8 *texptr, int w, int h, in
 	return (const u8 *)tmpTexBuf32_.data();
 }
 
+const u8 *TextureCacheCommon::TexRows::Row(int y) {
+	if (!band)
+		return base + rowBytes * y;
+	if ((y & ~7) != bandY) {
+		bandY = y & ~7;
+		DoUnswizzleTex16(base + rowBytes * bandY, (u32 *)band, rowBytes / 16, 1, rowBytes);
+	}
+	return band + rowBytes * (y & 7);
+}
+
+TextureCacheCommon::TexRows TextureCacheCommon::RowsOf(const u8 *texptr, int w, int h, int bufw, int bytesPerPixel, bool swizzled) {
+	const u32 rowBytes = bytesPerPixel == 0 ? bufw / 2 : bufw * bytesPerPixel;
+	if (!swizzled)
+		return { texptr, rowBytes, nullptr, -1 };
+	// Rows wider than bufw read on into the next ones, so those still want the whole level.
+	if (w > bufw)
+		return { UnswizzleToTemp(texptr, w, h, bufw, bytesPerPixel), rowBytes, nullptr, -1 };
+	// The band starts away from a page boundary, where outputs usually start too: loads a
+	// multiple of 4 KiB from recent stores stall on x86.
+	const size_t skew = 528;
+	tmpTexBuf32_.resize(skew + rowBytes * 2);
+	return { texptr, rowBytes, (u8 *)(tmpTexBuf32_.data() + skew), -1 };
+}
+
 TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETextureFormat format, GEPaletteFormat clutformat, uint32_t texaddr, int level, int bufw, TexDecodeFlags flags) {
 	u32 alphaSum = 0xFFFFFFFF;
 	u32 fullAlphaMask = 0x0;
@@ -2053,14 +2077,12 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 		const bool mipmapShareClut = gstate.isClutSharedForMipmaps();
 		const int clutSharingOffset = mipmapShareClut ? 0 : level * 16;
 
-		if (swizzled) {
-			texptr = UnswizzleToTemp(texptr, w, h, bufw, 0);
-		}
+		TexRows rows = RowsOf(texptr, w, h, bufw, 0, swizzled);
 
 		if (toClut8) {
 			// We just need to expand from 4 to 8 bits.
 			for (int y = 0; y < h; ++y) {
-				Expand4To8Bits((u8 *)out + outPitch * y, texptr + (bufw * y) / 2, w);
+				Expand4To8Bits((u8 *)out + outPitch * y, rows.Row(y), w);
 			}
 			// We can't know anything about alpha.
 			return TextureAlpha::Any;
@@ -2078,11 +2100,11 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 				// Here, reverseColors means the CLUT is already reversed.
 				if (reverseColors) {
 					for (int y = 0; y < h; ++y) {
-						DeIndexTexture4Optimal((u16 *)(out + outPitch * y), texptr + (bufw * y) / 2, w, clutProperties_.clutAlphaLinearColor);
+						DeIndexTexture4Optimal((u16 *)(out + outPitch * y), rows.Row(y), w, clutProperties_.clutAlphaLinearColor);
 					}
 				} else {
 					for (int y = 0; y < h; ++y) {
-						DeIndexTexture4OptimalRev((u16 *)(out + outPitch * y), texptr + (bufw * y) / 2, w, clutProperties_.clutAlphaLinearColor);
+						DeIndexTexture4OptimalRev((u16 *)(out + outPitch * y), rows.Row(y), w, clutProperties_.clutAlphaLinearColor);
 					}
 				}
 			} else {
@@ -2099,14 +2121,14 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 					}
 					fullAlphaMask = 0xFF000000;
 					for (int y = 0; y < h; ++y) {
-						DeIndexTexture4<u32>((u32 *)(out + outPitch * y), texptr + (bufw * y) / 2, w, expandClut_, &alphaSum);
+						DeIndexTexture4<u32>((u32 *)(out + outPitch * y), rows.Row(y), w, expandClut_, &alphaSum);
 					}
 				} else {
 					// If we're reversing colors, the CLUT was already reversed, no special handling needed.
 					const u16 *clut = (const u16 *)(clutBuf_) + clutSharingOffset;
 					fullAlphaMask = ClutFormatToFullAlpha(clutformat, reverseColors);
 					for (int y = 0; y < h; ++y) {
-						DeIndexTexture4<u16>((u16 *)(out + outPitch * y), texptr + (bufw * y) / 2, w, clut, &alphaSum);
+						DeIndexTexture4<u16>((u16 *)(out + outPitch * y), rows.Row(y), w, clut, &alphaSum);
 					}
 				}
 			}
@@ -2123,7 +2145,7 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 			const u32 *clut = (const u32 *)(clutBuf_) + clutSharingOffset;
 			fullAlphaMask = 0xFF000000;
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture4<u32>((u32 *)(out + outPitch * y), texptr + (bufw * y) / 2, w, clut, &alphaSum);
+				DeIndexTexture4<u32>((u32 *)(out + outPitch * y), rows.Row(y), w, clut, &alphaSum);
 			}
 		}
 		break;
@@ -2137,12 +2159,10 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 
 	case GE_TFMT_CLUT8:
 		if (toClut8) {
-			if (gstate.isTextureSwizzled()) {
-				texptr = UnswizzleToTemp(texptr, w, h, bufw, 1);
-			}
+			TexRows rows = RowsOf(texptr, w, h, bufw, 1, gstate.isTextureSwizzled());
 			// After deswizzling, we are in the correct format and can just copy.
 			for (int y = 0; y < h; ++y) {
-				memcpy((u8 *)out + outPitch * y, texptr + (bufw * y), w);
+				memcpy((u8 *)out + outPitch * y, rows.Row(y), w);
 			}
 			// We can't know anything about alpha.
 			return TextureAlpha::Any;
@@ -2158,97 +2178,51 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 	case GE_TFMT_4444:
 	case GE_TFMT_5551:
 	case GE_TFMT_5650:
-		if (!swizzled) {
-			// Just a simple copy, we swizzle the color format.
-			fullAlphaMask = TfmtRawToFullAlpha(format);
-			if (expandTo32bit) {
-				// This is OK even if reverseColors is on, because it expands to the 8888 format which is the same in reverse mode.
-				for (int y = 0; y < h; ++y) {
-					CheckMask16((const u16 *)(texptr + bufw * sizeof(u16) * y), w, &alphaSum);
-					ConvertFormatToRGBA8888(format, (u32 *)(out + outPitch * y), (const u16 *)texptr + bufw * y, w);
-				}
-			} else if (reverseColors) {
-				// Just check the input's alpha to reuse code. TODO: make a specialized ReverseColors that checks as we go.
-				for (int y = 0; y < h; ++y) {
-					CheckMask16((const u16 *)(texptr + bufw * sizeof(u16) * y), w, &alphaSum);
-					ReverseColors(out + outPitch * y, texptr + bufw * sizeof(u16) * y, format, w);
-				}
-			} else {
-				for (int y = 0; y < h; ++y) {
-					CopyAndSumMask16((u16 *)(out + outPitch * y), (u16 *)(texptr + bufw * sizeof(u16) * y), w, &alphaSum);
-				}
+	{
+		TexRows rows = RowsOf(texptr, w, h, bufw, 2, swizzled);
+		fullAlphaMask = TfmtRawToFullAlpha(format);
+		if (expandTo32bit) {
+			// This is OK even if reverseColors is on, because it expands to the 8888 format which is the same in reverse mode.
+			for (int y = 0; y < h; ++y) {
+				const u16 *row = (const u16 *)rows.Row(y);
+				CheckMask16(row, w, &alphaSum);
+				ConvertFormatToRGBA8888(format, (u32 *)(out + outPitch * y), row, w);
 			}
-		} /* else if (h >= 8 && bufw <= w && !expandTo32bit) {
-			// TODO: Handle alpha mask. This will require special versions of UnswizzleFromMem to keep the optimization.
-			// Note: this is always safe since h must be a power of 2, so a multiple of 8.
-			UnswizzleFromMem((u32 *)out, outPitch, texptr, bufw, h, 2);
-			if (reverseColors) {
-				ReverseColors(out, out, format, h * outPitch / 2, useBGRA);
+		} else if (reverseColors) {
+			// Just check the input's alpha to reuse code. TODO: make a specialized ReverseColors that checks as we go.
+			for (int y = 0; y < h; ++y) {
+				const u8 *row = rows.Row(y);
+				CheckMask16((const u16 *)row, w, &alphaSum);
+				ReverseColors(out + outPitch * y, row, format, w);
 			}
-		}*/ else {
-			// We don't have enough space for all rows in out, so use a temp buffer.
-			const u8 *unswizzled = UnswizzleToTemp(texptr, w, h, bufw, 2);
-
-			fullAlphaMask = TfmtRawToFullAlpha(format);
-			if (expandTo32bit) {
-				// This is OK even if reverseColors is on, because it expands to the 8888 format which is the same in reverse mode.
-				// Just check the swizzled input's alpha to reuse code. TODO: make a specialized ConvertFormatToRGBA8888 that checks as we go.
-				for (int y = 0; y < h; ++y) {
-					CheckMask16((const u16 *)(unswizzled + bufw * sizeof(u16) * y), w, &alphaSum);
-					ConvertFormatToRGBA8888(format, (u32 *)(out + outPitch * y), (const u16 *)unswizzled + bufw * y, w);
-				}
-			} else if (reverseColors) {
-				// Just check the swizzled input's alpha to reuse code. TODO: make a specialized ReverseColors that checks as we go.
-				for (int y = 0; y < h; ++y) {
-					CheckMask16((const u16 *)(unswizzled + bufw * sizeof(u16) * y), w, &alphaSum);
-					ReverseColors(out + outPitch * y, unswizzled + bufw * sizeof(u16) * y, format, w);
-				}
-			} else {
-				for (int y = 0; y < h; ++y) {
-					CopyAndSumMask16((u16 *)(out + outPitch * y), (const u16 *)(unswizzled + bufw * sizeof(u16) * y), w, &alphaSum);
-				}
+		} else {
+			for (int y = 0; y < h; ++y) {
+				CopyAndSumMask16((u16 *)(out + outPitch * y), (const u16 *)rows.Row(y), w, &alphaSum);
 			}
 		}
+	}
 		if (format == GE_TFMT_5650) {
 			return TextureAlpha::Solid;
 		}
 		break;
 
 	case GE_TFMT_8888:
-		if (!swizzled) {
-			fullAlphaMask = TfmtRawToFullAlpha(format);
-			if (reverseColors) {
-				for (int y = 0; y < h; ++y) {
-					CheckMask32((const u32 *)(texptr + bufw * sizeof(u32) * y), w, &alphaSum);
-					ReverseColors(out + outPitch * y, texptr + bufw * sizeof(u32) * y, format, w);
-				}
-			} else {
-				for (int y = 0; y < h; ++y) {
-					CopyAndSumMask32((u32 *)(out + outPitch * y), (const u32 *)(texptr + bufw * sizeof(u32) * y), w, &alphaSum);
-				}
+	{
+		TexRows rows = RowsOf(texptr, w, h, bufw, 4, swizzled);
+		fullAlphaMask = TfmtRawToFullAlpha(format);
+		if (reverseColors) {
+			for (int y = 0; y < h; ++y) {
+				const u8 *row = rows.Row(y);
+				CheckMask32((const u32 *)row, w, &alphaSum);
+				ReverseColors(out + outPitch * y, row, format, w);
 			}
-		} /* else if (h >= 8 && bufw <= w) {
-			// TODO: Handle alpha mask
-			UnswizzleFromMem((u32 *)out, outPitch, texptr, bufw, h, 4);
-			if (reverseColors) {
-				ReverseColors(out, out, format, h * outPitch / 4, useBGRA);
-			}
-		}*/ else {
-			const u8 *unswizzled = UnswizzleToTemp(texptr, w, h, bufw, 4);
-
-			fullAlphaMask = TfmtRawToFullAlpha(format);
-			if (reverseColors) {
-				for (int y = 0; y < h; ++y) {
-					CheckMask32((const u32 *)(unswizzled + bufw * sizeof(u32) * y), w, &alphaSum);
-					ReverseColors(out + outPitch * y, unswizzled + bufw * sizeof(u32) * y, format, w);
-				}
-			} else {
-				for (int y = 0; y < h; ++y) {
-					CopyAndSumMask32((u32 *)(out + outPitch * y), (const u32 *)(unswizzled + bufw * sizeof(u32) * y), w, &alphaSum);
-				}
+		} else {
+			for (int y = 0; y < h; ++y) {
+				CopyAndSumMask32((u32 *)(out + outPitch * y), (const u32 *)rows.Row(y), w, &alphaSum);
 			}
 		}
-		break;
+	}
+	break;
 
 	case GE_TFMT_DXT1:
 		return DecodeDXTBlocks<DXT1Block, 1>(out, outPitch, texaddr, texptr, w, h, bufw, reverseColors);
@@ -2268,9 +2242,7 @@ TextureAlpha TextureCacheCommon::DecodeTextureLevel(u8 *out, int outPitch, GETex
 }
 
 TextureAlpha TextureCacheCommon::ReadIndexedTex(u8 *out, int outPitch, int w, int h, int level, const u8 *texptr, int bytesPerIndex, int bufw, bool reverseColors, bool expandTo32Bit) {
-	if (gstate.isTextureSwizzled()) {
-		texptr = UnswizzleToTemp(texptr, w, h, bufw, bytesPerIndex);
-	}
+	TexRows rows = RowsOf(texptr, w, h, bufw, bytesPerIndex, gstate.isTextureSwizzled());
 
 	// Misshitsu no Sacrifice has separate CLUT data, this is a hack to allow it.
 	// Normally separate CLUTs are not allowed for 8-bit or higher indices.
@@ -2307,19 +2279,19 @@ TextureAlpha TextureCacheCommon::ReadIndexedTex(u8 *out, int outPitch, int w, in
 		switch (bytesPerIndex) {
 		case 1:
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture((u16 *)(out + outPitch * y), (const u8 *)texptr + bufw * y, w, clut16, &alphaSum);
+				DeIndexTexture((u16 *)(out + outPitch * y), (const u8 *)rows.Row(y), w, clut16, &alphaSum);
 			}
 			break;
 
 		case 2:
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture((u16 *)(out + outPitch * y), (const u16_le *)texptr + bufw * y, w, clut16, &alphaSum);
+				DeIndexTexture((u16 *)(out + outPitch * y), (const u16_le *)rows.Row(y), w, clut16, &alphaSum);
 			}
 			break;
 
 		case 4:
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture((u16 *)(out + outPitch * y), (const u32_le *)texptr + bufw * y, w, clut16, &alphaSum);
+				DeIndexTexture((u16 *)(out + outPitch * y), (const u32_le *)rows.Row(y), w, clut16, &alphaSum);
 			}
 			break;
 		}
@@ -2332,19 +2304,19 @@ TextureAlpha TextureCacheCommon::ReadIndexedTex(u8 *out, int outPitch, int w, in
 		switch (bytesPerIndex) {
 		case 1:
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture((u32 *)(out + outPitch * y), (const u8 *)texptr + bufw * y, w, clut32, &alphaSum);
+				DeIndexTexture((u32 *)(out + outPitch * y), (const u8 *)rows.Row(y), w, clut32, &alphaSum);
 			}
 			break;
 
 		case 2:
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture((u32 *)(out + outPitch * y), (const u16_le *)texptr + bufw * y, w, clut32, &alphaSum);
+				DeIndexTexture((u32 *)(out + outPitch * y), (const u16_le *)rows.Row(y), w, clut32, &alphaSum);
 			}
 			break;
 
 		case 4:
 			for (int y = 0; y < h; ++y) {
-				DeIndexTexture((u32 *)(out + outPitch * y), (const u32_le *)texptr + bufw * y, w, clut32, &alphaSum);
+				DeIndexTexture((u32 *)(out + outPitch * y), (const u32_le *)rows.Row(y), w, clut32, &alphaSum);
 			}
 			break;
 		}

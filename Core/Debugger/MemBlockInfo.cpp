@@ -71,12 +71,17 @@ private:
 
 	Slab *FindSlab(uint32_t addr);
 	void Clear();
-	// Returns the new slab after size.
-	Slab *Split(Slab *slab, uint32_t size);
+	// Cuts slab at size: slab becomes the part before, and the part after is returned. Either
+	// may be the new slab - whichever is shorter, as that is the part the index is updated for.
+	Slab *Split(Slab *&slab, uint32_t size);
 	void MergeAdjacent(Slab *slab);
 	static inline bool Same(const Slab *a, const Slab *b);
-	void Merge(Slab *a, Slab *b);
+	// Whether marking within slab would leave it as it is, apart from the ticks.
+	static bool Unchanged(const Slab *slab, uint32_t pc, bool allocated, const char *tag, size_t tagLen);
+	// Returns the slab that remains, the longer one.
+	Slab *Merge(Slab *a, Slab *b);
 	void FillHeads(Slab *slab);
+	void SetHeads(Slab *slab, uint32_t start, uint32_t end);
 	Slab *NewSlab();
 	void FreeSlab(Slab *slab);
 	void FreeSpares();
@@ -108,6 +113,7 @@ static MemSlabMap suballocMap;
 static MemSlabMap writeMap;
 static MemSlabMap textureMap;
 static MpscQueue<PendingNotifyMem> pendingNotifies;
+static uint64_t indexUpdates;
 static retro_atomic_int_t detailedOverride{ 0 };
 
 MemSlabMap::MemSlabMap() {
@@ -121,11 +127,21 @@ MemSlabMap::~MemSlabMap() {
 bool MemSlabMap::Mark(uint32_t addr, uint32_t size, uint64_t ticks, uint32_t pc, bool allocated, const char *tag, size_t tagLen) {
 	uint32_t end = addr + size;
 	Slab *slab = FindSlab(addr);
+	if (slab != nullptr && slab->end >= end && Unchanged(slab, pc, allocated, tag, tagLen)) {
+		// Within one slab that already says this: cutting the range out would only merge it back
+		// again, leaving the newer of the ticks. Games write the same buffers from the same code
+		// over and over, and frees mostly land on what is already free.
+		if (pc != 0)
+			slab->ticks = slab->start == addr && slab->end == end ? ticks : std::max(slab->ticks, ticks);
+		return true;
+	}
 	Slab *firstMatch = nullptr;
 	while (slab != nullptr && slab->start < end) {
-		if (slab->start < addr)
-			slab = Split(slab, addr - slab->start);
-		// Don't replace slab, the return is the after part.
+		if (slab->start < addr) {
+			Slab *after = Split(slab, addr - slab->start);
+			slab = after;
+		}
+		// slab stays the part before end, the one being marked.
 		if (slab->end > end) {
 			Split(slab, end - slab->start);
 		}
@@ -339,28 +355,47 @@ void MemSlabMap::FreeSpares() {
 	}
 }
 
-MemSlabMap::Slab *MemSlabMap::Split(Slab *slab, uint32_t size) {
-	Slab *next = NewSlab();
-	next->start = slab->start + size;
-	next->end = slab->end;
-	next->ticks = slab->ticks;
-	next->pc = slab->pc;
-	next->allocated = slab->allocated;
-	next->tagLen = (uint8_t)std::min<size_t>(slab->tagLen, sizeof(next->tag) - 1);
-	memcpy(next->tag, slab->tag, next->tagLen);
-	next->tag[next->tagLen] = '\0';
-	next->prev = slab;
-	next->next = slab->next;
+MemSlabMap::Slab *MemSlabMap::Split(Slab *&slab, uint32_t size) {
+	Slab *piece = NewSlab();
+	piece->ticks = slab->ticks;
+	piece->pc = slab->pc;
+	piece->allocated = slab->allocated;
+	piece->tagLen = (uint8_t)std::min<size_t>(slab->tagLen, sizeof(piece->tag) - 1);
+	memcpy(piece->tag, slab->tag, piece->tagLen);
+	piece->tag[piece->tagLen] = '\0';
 
-	slab->next = next;
-	if (next->next)
-		next->next->prev = next;
+	// Only the index entries of the new slab's part change. The first slab spans the whole
+	// address space, and marks cut small pieces out of large unmarked stretches, so making
+	// the shorter part the new one keeps that to the size of the mark.
+	const uint32_t at = slab->start + size;
+	if (size <= slab->end - at) {
+		piece->start = slab->start;
+		piece->end = at;
+		piece->prev = slab->prev;
+		piece->next = slab;
+		if (piece->prev)
+			piece->prev->next = piece;
+		else
+			first_ = piece;
+		slab->prev = piece;
+		slab->start = at;
+		SetHeads(piece, piece->start, piece->end);
 
-	// If the split is big, we might have to update our index.
-	FillHeads(next);
+		Slab *after = slab;
+		slab = piece;
+		return after;
+	}
 
-	slab->end = slab->start + size;
-	return next;
+	piece->start = at;
+	piece->end = slab->end;
+	piece->prev = slab;
+	piece->next = slab->next;
+	slab->next = piece;
+	if (piece->next)
+		piece->next->prev = piece;
+	slab->end = at;
+	SetHeads(piece, piece->start, piece->end);
+	return piece;
 }
 
 bool MemSlabMap::Same(const Slab *a, const Slab *b) {
@@ -373,62 +408,77 @@ bool MemSlabMap::Same(const Slab *a, const Slab *b) {
 	return true;
 }
 
+bool MemSlabMap::Unchanged(const Slab *slab, uint32_t pc, bool allocated, const char *tag, size_t tagLen) {
+	if (slab->allocated != allocated || (pc != 0 && slab->pc != pc))
+		return false;
+	if (tag) {
+		const size_t len = std::min(tagLen, sizeof(slab->tag) - 1);
+		if (slab->tagLen != len || memcmp(slab->tag, tag, len) != 0)
+			return false;
+	}
+	// Marking merges with like neighbours, which an unchanged slab would not.
+	return !(slab->prev && Same(slab, slab->prev)) && !(slab->next && Same(slab, slab->next));
+}
+
 void MemSlabMap::MergeAdjacent(Slab *slab) {
 	while (slab->next != nullptr && Same(slab, slab->next)) {
-		Merge(slab, slab->next);
+		slab = Merge(slab, slab->next);
 	}
 	while (slab->prev != nullptr && Same(slab, slab->prev)) {
-		Merge(slab, slab->prev);
+		slab = Merge(slab, slab->prev);
 	}
 }
 
-void MemSlabMap::Merge(Slab *a, Slab *b) {
-	if (a->next == b) {
-		_assert_(a->end == b->start);
-		a->end = b->end;
-		a->next = b->next;
+MemSlabMap::Slab *MemSlabMap::Merge(Slab *a, Slab *b) {
+	// Same() holds, so the two only differ in their range and ticks: whichever object is
+	// kept, the result is the same. Keep the longer one, so only the shorter one's index
+	// entries need moving over.
+	Slab *keep = b->end - b->start > a->end - a->start ? b : a;
+	Slab *gone = keep == a ? b : a;
+	if (keep->next == gone) {
+		_assert_(keep->end == gone->start);
+		keep->end = gone->end;
+		keep->next = gone->next;
 
-		if (a->next)
-			a->next->prev = a;
-	} else if (a->prev == b) {
-		_assert_(b->end == a->start);
-		a->start = b->start;
-		a->prev = b->prev;
+		if (keep->next)
+			keep->next->prev = keep;
+	} else if (keep->prev == gone) {
+		_assert_(gone->end == keep->start);
+		keep->start = gone->start;
+		keep->prev = gone->prev;
 
-		if (a->prev)
-			a->prev->next = a;
-		else if (first_ == b)
-			first_ = a;
+		if (keep->prev)
+			keep->prev->next = keep;
+		else if (first_ == gone)
+			first_ = keep;
 	} else {
 		_assert_(false);
 	}
-	// Take over index entries b had.
-	FillHeads(a);
-	if (b->ticks > a->ticks) {
-		a->ticks = b->ticks;
+	SetHeads(keep, gone->start, gone->end);
+	if (gone->ticks > keep->ticks) {
+		keep->ticks = gone->ticks;
 		// In case we ignore PC for same.
-		a->pc = b->pc;
+		keep->pc = gone->pc;
 	}
-	if (lastFind_ == b)
-		lastFind_ = a;
-	FreeSlab(b);
+	if (lastFind_ == gone)
+		lastFind_ = keep;
+	FreeSlab(gone);
+	return keep;
 }
 
 void MemSlabMap::FillHeads(Slab *slab) {
-	uint32_t slice = slab->start / SLICE_SIZE;
-	uint32_t endSlice = (slab->end - 1) / SLICE_SIZE;
+	SetHeads(slab, slab->start, slab->end);
+}
 
-	// For the first slice, only replace if it's the one we're removing.
-	if (slab->start == slice * SLICE_SIZE) {
-		heads_[slice] = slab;
-	}
-
-	// Now replace all the rest - we definitely cover the start of them.
-	Slab **next = &heads_[slice + 1];
-	// We want to set slice + 1 through endSlice, inclusive.
-	size_t c = endSlice - slice;
-	for (size_t i = 0; i < c; ++i) {
-		next[i] = slab;
+// The index holds, for each slice, the slab its first address is in: point every slice that
+// starts within [start, end) at slab.
+void MemSlabMap::SetHeads(Slab *slab, uint32_t start, uint32_t end) {
+	const uint32_t first = (start + SLICE_SIZE - 1) / SLICE_SIZE;
+	const uint32_t last = (end - 1) / SLICE_SIZE;
+	if (first <= last)
+		indexUpdates += last - first + 1;
+	for (uint32_t i = first; i <= last; ++i) {
+		heads_[i] = slab;
 	}
 }
 
@@ -659,6 +709,10 @@ void MemBlockInfoDoState(PointerWrap &p) {
 	suballocMap.DoState(p);
 	writeMap.DoState(p);
 	textureMap.DoState(p);
+}
+
+uint64_t MemBlockInfoIndexUpdates() {
+	return indexUpdates;
 }
 
 // Used by the debugger.

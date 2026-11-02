@@ -1,5 +1,7 @@
-// Memory block info maps against a per-address model: random notifications,
-// savestate round trips, and no heap traffic once the maps have warmed up.
+// Memory block info maps against a per-address model: random notifications at several scales,
+// savestate round trips, index work in proportion to the marks, and no heap traffic once the
+// maps have warmed up. MBITEST_BENCH=1 times notifications instead.
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -34,8 +36,10 @@ void operator delete[](void *p, size_t) noexcept { free(p); }
 
 void FlushPendingMemInfo();
 
-static const uint32_t BASE = 0x08800000;
-static const uint32_t UNIT = 0x10;
+// The model covers UNITS units from BASE. Small units keep everything within one slice of the
+// maps' index, large ones spread marks over many slices, cut at points between slice starts.
+static uint32_t BASE = 0x08800000;
+static uint32_t UNIT = 0x10;
 static const uint32_t UNITS = 512;
 
 struct Cell {
@@ -166,21 +170,137 @@ static void RoundTrip() {
 	}
 }
 
-int main() {
+// MBITEST_BENCH=1: the cost of notifications the way a game or a GE dump replay makes them -
+// writes of a few hundred bytes to a few hundred kB anywhere in user RAM, a handful of tags.
+static void Bench() {
+	static const char *tags[] = { "ReplayTex", "ReplayMemcpy", "GPUBlockTransfer/x", "IoRead", "Memcpy" };
 	MemBlockInfoInit();
+	const int marks = 200000;
+	uint32_t r = 777;
+	auto t0 = std::chrono::steady_clock::now();
+	for (int i = 0; i < marks; ++i) {
+		r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+		const uint32_t size = 0x100u << (r % 11);
+		const uint32_t addr = 0x08800000 + ((r >> 8) % (0x01800000 - size)) & ~0xFFu;
+		const char *tag = tags[(r >> 4) % 5];
+		NotifyMemInfoPC(MemBlockFlags::WRITE | MemBlockFlags::SKIP_MEMCHECK, addr, size, 0x08804000, tag, strlen(tag));
+		if ((i & 63) == 63)
+			FlushPendingMemInfo();
+	}
+	FlushPendingMemInfo();
+	double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	printf("mbitest bench: scattered, %d marks, %.1f ns each\n", marks, s * 1e9 / marks);
+	MemBlockInfoShutdown();
+
+	// A replay's frame: the same buffers written again every frame, by the same code.
+	MemBlockInfoInit();
+	t0 = std::chrono::steady_clock::now();
+	for (int i = 0; i < marks; ++i) {
+		const uint32_t addr = 0x08800000 + (uint32_t)(i % 64) * 0x20000;
+		NotifyMemInfoPC(MemBlockFlags::WRITE | MemBlockFlags::SKIP_MEMCHECK, addr + 0x1000, 0x8000, 0x08804000, "ReplayTex", 9);
+		if ((i & 63) == 63)
+			FlushPendingMemInfo();
+	}
+	FlushPendingMemInfo();
+	s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	printf("mbitest bench: repeated, %d marks, %.1f ns each\n", marks, s * 1e9 / marks);
+	MemBlockInfoShutdown();
+
+	// Allocations made and freed again at the top of what has been used: each one is cut out
+	// of the unmarked rest of the address space and merged back into it.
+	MemBlockInfoInit();
+	NotifyMemInfoPC(MemBlockFlags::ALLOC | MemBlockFlags::SKIP_MEMCHECK, 0x08800000, 0x00400000, 0x08804000, "Game", 4);
+	t0 = std::chrono::steady_clock::now();
+	for (int i = 0; i < marks; ++i) {
+		const uint32_t addr = 0x08C00000 + (uint32_t)(i % 16) * 0x10000;
+		NotifyMemInfoPC(MemBlockFlags::ALLOC | MemBlockFlags::SKIP_MEMCHECK, addr, 0x10000, 0x08804000, "Slab", 4);
+		NotifyMemInfoPC(MemBlockFlags::FREE | MemBlockFlags::SKIP_MEMCHECK, addr, 0x10000, 0x08804000, "", 0);
+		if ((i & 31) == 31)
+			FlushPendingMemInfo();
+	}
+	FlushPendingMemInfo();
+	s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	printf("mbitest bench: alloc/free at the top, %d pairs, %.1f ns each\n", marks, s * 1e9 / marks);
+	MemBlockInfoShutdown();
+}
+
+int main() {
+	if (getenv("MBITEST_BENCH")) {
+		Bench();
+		return 0;
+	}
 	MemBlockOverrideDetailed();
 
-	for (int round = 0; round < 40 && failures == 0; ++round) {
-		for (int i = 0; i < 400; ++i)
-			Op(i);
+	static const uint32_t scales[][2] = {
+		{ 0x08800000, 0x10 },
+		{ 0x08802a00, 0x1300 },
+		{ 0x00010000, 0x10000 },
+		{ 0x30000000, 0x80000 },
+	};
+	for (const auto &scale : scales) {
+		BASE = scale[0];
+		UNIT = scale[1];
+		MemBlockInfoInit();
+		for (int m = 0; m < MAPS; ++m)
+			for (uint32_t u = 0; u < UNITS; ++u)
+				model[m][u] = Cell();
+		for (int round = 0; round < 40 && failures == 0; ++round) {
+			for (int i = 0; i < 400; ++i)
+				Op(i);
+			FlushPendingMemInfo();
+			Check("ops");
+			// Loading rebuilds the maps from one array per map; work continues on top.
+			if (round % 4 == 3) {
+				RoundTrip();
+				Check("load");
+			}
+		}
+		MemBlockInfoShutdown();
+	}
+
+	// Marks cost the index what they cover, not what the slabs around them span: the first slab
+	// spans the whole address space, so allocations at the top of what is in use, freed again,
+	// used to rewrite the index for everything above them, twice each.
+	MemBlockInfoInit();
+	NotifyMemInfoPC(MemBlockFlags::ALLOC | MemBlockFlags::SKIP_MEMCHECK, 0x08800000, 0x00400000, 0x08804000, "Game", 4);
+	NotifyMemInfoPC(MemBlockFlags::WRITE | MemBlockFlags::SKIP_MEMCHECK, 0x08800000, 0x00400000, 0x08804000, "Load", 4);
+	FlushPendingMemInfo();
+	const uint64_t indexBefore = MemBlockInfoIndexUpdates();
+	for (int i = 0; i < 1000; ++i) {
+		const uint32_t addr = 0x08C00000 + (uint32_t)(i % 16) * 0x10000;
+		NotifyMemInfoPC(MemBlockFlags::ALLOC | MemBlockFlags::SKIP_MEMCHECK, addr, 0x10000, 0x08804000, "Slab", 4);
+		NotifyMemInfoPC(MemBlockFlags::WRITE | MemBlockFlags::SKIP_MEMCHECK, addr + 0x100, 0x400, 0x08804100, "Fill", 4);
+		NotifyMemInfoPC(MemBlockFlags::FREE | MemBlockFlags::SKIP_MEMCHECK, addr, 0x10000, 0x08804000, "", 0);
+		// The same buffer written by the same code every frame.
+		NotifyMemInfoPC(MemBlockFlags::WRITE | MemBlockFlags::SKIP_MEMCHECK, 0x08900000, 0x800, 0x08804200, "Load", 4);
 		FlushPendingMemInfo();
-		Check("ops");
-		// Loading rebuilds the maps from one array per map; work continues on top.
-		if (round % 4 == 3) {
-			RoundTrip();
-			Check("load");
+	}
+	const uint64_t indexWork = MemBlockInfoIndexUpdates() - indexBefore;
+	if (getenv("MBITEST_VERBOSE"))
+		printf("index updates: %llu\n", (unsigned long long)indexWork);
+	// A 64 KiB block is four 16 KiB slices. Freed blocks merge, so allocating one again cuts it
+	// out of up to fifteen others: around 40 a round. It was hundreds of thousands.
+	if (indexWork > 1000 * 100) {
+		printf("FAIL: %llu index updates for 1000 small allocations\n", (unsigned long long)indexWork);
+		++failures;
+	}
+	{
+		std::vector<MemBlockInfo> r = FindMemInfoByFlag(MemBlockFlags::ALLOC, 0x08C00000, 0x100000);
+		for (const MemBlockInfo &b : r) {
+			if (b.allocated) {
+				printf("FAIL: freed block %08x still allocated\n", b.start);
+				++failures;
+			}
+		}
+		r = FindMemInfoByFlag(MemBlockFlags::WRITE, 0x08900000, 0x800);
+		if (r.size() != 1 || r[0].tag != "Load" || r[0].pc != 0x08804000 && r[0].pc != 0x08804200) {
+			printf("FAIL: rewritten buffer lost its tag\n");
+			++failures;
 		}
 	}
+	MemBlockInfoShutdown();
+
+	MemBlockInfoInit();
 
 	// A repeating pattern of marks splits and merges slabs every pass. Once the
 	// maps have seen it, it must not touch the heap.
@@ -205,6 +325,6 @@ int main() {
 	MemBlockInfoShutdown();
 	if (failures)
 		return 1;
-	printf("mbitest: model, savestate and steady-state checks pass\n");
+	printf("mbitest: model at four scales, savestate, index cost and steady-state checks pass\n");
 	return 0;
 }

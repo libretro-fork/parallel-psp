@@ -85,6 +85,9 @@ void MemBlockInfoInit();
 void MemBlockInfoShutdown();
 void MemBlockInfoDoState(PointerWrap &p);
 
+// How many index entries the maps have rewritten, for tests: marks should cost what they cover.
+uint64_t MemBlockInfoIndexUpdates();
+
 void MemBlockOverrideDetailed();
 void MemBlockReleaseDetailed();
 bool MemBlockInfoDetailed();

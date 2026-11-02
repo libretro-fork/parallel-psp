@@ -93,6 +93,26 @@ inline float GEAdd(float a, float b) {
 	return a + b;
 }
 
+// Truncating conversions as x86 does them, wherever this runs: NaN and anything out of range give the
+// most negative value. A plain cast of those is undefined, and ARM saturates instead.
+inline int32_t GEToInt32(float f) {
+	return f >= -2147483648.0f && f < 2147483648.0f ? (int32_t)f : INT32_MIN;
+}
+inline int64_t GEToInt64(double d) {
+	return d >= -9223372036854775808.0 && d < 9223372036854775808.0 ? (int64_t)d : INT64_MIN;
+}
+
+// Two's complement arithmetic that wraps on overflow, as the hardware's does, instead of being undefined.
+inline int64_t GEWrapAdd(int64_t a, int64_t b) {
+	return (int64_t)((uint64_t)a + (uint64_t)b);
+}
+inline int64_t GEWrapSub(int64_t a, int64_t b) {
+	return (int64_t)((uint64_t)a - (uint64_t)b);
+}
+inline int64_t GEWrapMul(int64_t a, int64_t b) {
+	return (int64_t)((uint64_t)a * (uint64_t)b);
+}
+
 // One term of a matrix row as the GE keeps it: the exact product, truncated at a fixed bit weight,
 // 2^-15 below the inputs' exponents combined. A significand product of 2 or more keeps a 17th bit.
 struct GERowTerm {
@@ -128,8 +148,11 @@ inline float GERowSum(const GERowTerm *terms, int count) {
 	int32_t sum = 0;
 	for (int i = 0; i < count; ++i) {
 		const int32_t m = terms[i].mantissa;
+		// A zero term's exponent is INT_MIN.
+		if (m == 0)
+			continue;
 		const int shift = lsbExp - terms[i].lsbExp;
-		if (m != 0 && shift < 32) {
+		if (shift < 32) {
 			sum += m < 0 ? -(-m >> shift) : (m >> shift);
 		}
 	}

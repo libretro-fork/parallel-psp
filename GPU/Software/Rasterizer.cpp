@@ -734,8 +734,12 @@ static inline Vec4<int> SOFTRAST_CALL CheckDepthTestPassed4(const Vec4<int> &mas
 	// Read in the existing depth values.
 #if defined(_M_SSE)
 	// Tried using flags from maskbits to skip dwords... seemed neutral.
-	__m128i refz = _mm_cvtsi32_si128(*(u32 *)depthbuf.Get16Ptr(x, y, stride));
-	refz = _mm_unpacklo_epi32(refz, _mm_cvtsi32_si128(*(u32 *)depthbuf.Get16Ptr(x, y + 1, stride)));
+	// Two pixels at a time, at any 16-bit alignment.
+	u32 refz0, refz1;
+	memcpy(&refz0, depthbuf.Get16Ptr(x, y, stride), sizeof(refz0));
+	memcpy(&refz1, depthbuf.Get16Ptr(x, y + 1, stride), sizeof(refz1));
+	__m128i refz = _mm_cvtsi32_si128(refz0);
+	refz = _mm_unpacklo_epi32(refz, _mm_cvtsi32_si128(refz1));
 	refz = _mm_unpacklo_epi16(refz, _mm_setzero_si128());
 #else
 	Vec4<int> refz(depthbuf.Get16(x, y, stride), depthbuf.Get16(x + 1, y, stride), depthbuf.Get16(x, y + 1, stride), depthbuf.Get16(x + 1, y + 1, stride));
@@ -1015,7 +1019,7 @@ struct DepthPlane {
 	bool rightAnchored = false;  // the long edge is the right side: the GE walks rows right to left
 
 	int64_t At(int64_t x, int64_t y) const {
-		return (base + kx * x + ky * y) >> 14;
+		return GEWrapAdd(base, GEWrapAdd(GEWrapMul(kx, x), GEWrapMul(ky, y))) >> 14;
 	}
 };
 
@@ -1023,18 +1027,20 @@ static DepthPlane ComputePlane(const int64_t X[3], const int64_t Y[3], const int
 	DepthPlane plane{};
 	const int64_t det = (X[1] - X[0]) * (Y[2] - Y[0]) - (X[2] - X[0]) * (Y[1] - Y[0]);
 	if (det == 0) {
-		plane.base = Z[0] << 14;
+		plane.base = GEWrapMul(Z[0], 1 << 14);
 		return plane;
 	}
-	const int64_t nx = (Z[1] - Z[0]) * (Y[2] - Y[0]) - (Z[2] - Z[0]) * (Y[1] - Y[0]);
-	const int64_t ny = (Z[2] - Z[0]) * (X[1] - X[0]) - (Z[1] - Z[0]) * (X[2] - X[0]);
+	// Garbage values (out of range UVs) wrap like they would on the GE's own adders.
+	const int64_t dz1 = GEWrapSub(Z[1], Z[0]), dz2 = GEWrapSub(Z[2], Z[0]);
+	const int64_t nx = GEWrapSub(GEWrapMul(dz1, Y[2] - Y[0]), GEWrapMul(dz2, Y[1] - Y[0]));
+	const int64_t ny = GEWrapSub(GEWrapMul(dz2, X[1] - X[0]), GEWrapMul(dz1, X[2] - X[0]));
 	const uint64_t absDet = (uint64_t)(det < 0 ? -det : det);
 	int e;
 	const int64_t q = GESetupRecip(absDet, &e);
 	const int64_t sign = det < 0 ? -1 : 1;
 	// n / det * 2^14, as floor(n * q / 2^(e + 2)).
-	plane.kx = (sign * nx * q) >> (e + 2);
-	plane.ky = (sign * ny * q) >> (e + 2);
+	plane.kx = GEWrapMul(GEWrapMul(sign, nx), q) >> (e + 2);
+	plane.ky = GEWrapMul(GEWrapMul(sign, ny), q) >> (e + 2);
 
 	int top = 0, mid = 1, bot = 2;
 	auto above = [&](int a, int b) { return Y[a] < Y[b] || (Y[a] == Y[b] && X[a] < X[b]); };
@@ -1054,7 +1060,7 @@ static DepthPlane ComputePlane(const int64_t X[3], const int64_t Y[3], const int
 			if (X[i] < X[anchor] || (X[i] == X[anchor] && Y[i] < Y[anchor]))
 				anchor = i;
 	}
-	plane.base = (Z[anchor] << 14) - plane.kx * X[anchor] - plane.ky * Y[anchor];
+	plane.base = GEWrapSub(GEWrapSub(GEWrapMul(Z[anchor], 1 << 14), GEWrapMul(plane.kx, X[anchor])), GEWrapMul(plane.ky, Y[anchor]));
 	return plane;
 }
 
@@ -1108,7 +1114,7 @@ static int SharedShift(const double v[3]) {
 }
 
 static DepthPlane FixedPlane(const int64_t X[3], const int64_t Y[3], const double v[3], int shift) {
-	const int64_t V[3] = { (int64_t)std::ldexp(v[0], shift), (int64_t)std::ldexp(v[1], shift), (int64_t)std::ldexp(v[2], shift) };
+	const int64_t V[3] = { GEToInt64(std::ldexp(v[0], shift)), GEToInt64(std::ldexp(v[1], shift)), GEToInt64(std::ldexp(v[2], shift)) };
 	return ComputePlane(X, Y, V);
 }
 

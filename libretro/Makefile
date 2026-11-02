@@ -427,6 +427,12 @@ endif
 
 OBJECTS		+= $(SOURCES_CXX:.cpp=.o) $(SOURCES_C:.c=.o) $(ASMFILES:.S=.o)
 
+# Sanitizer flags for the software renderer alone (GPU/Software), as the softgpu UBSan check builds it.
+ifneq ($(SOFTGPU_SANITIZE),)
+$(filter ../GPU/Software/%.o,$(OBJECTS)): CXXFLAGS += $(SOFTGPU_SANITIZE)
+LDFLAGS += $(SOFTGPU_SANITIZE)
+endif
+
 ifeq (,$(findstring msvc,$(platform)))
 # No fused multiply-adds in CPU emulation unless written explicitly, so its float results are the
 # same on every CPU. Elsewhere (the vertex decoder, say) they're fine.

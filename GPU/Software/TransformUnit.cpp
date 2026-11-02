@@ -235,9 +235,11 @@ static ScreenCoords ClipToScreenInternal(Vec3f scaled, const ClipCoords &coords,
 
 	// 16 = 0xFFFF / 4095.9375
 	static_assert(SCREEN_SCALE_FACTOR == 16, "Currently only supports scale 16");
-	int x = (int)floorf(scaled.x * 16.0f) - gstate.getOffsetX16();
-	int y = (int)floorf(scaled.y * 16.0f) - gstate.getOffsetY16();
-	return ScreenCoords(x, y, scaled.z);
+	// Far outside the range, these wrap as on x86.
+	int x = (int)((uint32_t)GEToInt32(floorf(scaled.x * 16.0f)) - (uint32_t)gstate.getOffsetX16());
+	int y = (int)((uint32_t)GEToInt32(floorf(scaled.y * 16.0f)) - (uint32_t)gstate.getOffsetY16());
+	// Z outside 0..65535 (flagged above) keeps its low 16 bits, as on x86.
+	return ScreenCoords(x, y, (u16)GEToInt32(scaled.z));
 }
 
 static inline ScreenCoords ClipToScreenInternal(const ClipCoords &coords, bool *outside_range_flag) {

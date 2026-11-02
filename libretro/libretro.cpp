@@ -499,10 +499,9 @@ static void check_variables(CoreParameter &coreParam)
    }
 
    var.key = "ppsspp_internal_resolution";
+   iInternalResolution_prev = g_Config.iInternalResolution;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
-      iInternalResolution_prev = g_Config.iInternalResolution;
-
       if (!strcmp(var.value, "480x272"))
          g_Config.iInternalResolution = 1;
       else if (!strcmp(var.value, "960x544"))
@@ -528,6 +527,10 @@ static void check_variables(CoreParameter &coreParam)
       if (backend == RETRO_HW_CONTEXT_NONE)
          g_Config.iInternalResolution = 1;
    }
+   // Without the option, or with a value it doesn't know, the setting is the standalone
+   // default, 0 (auto) on desktops: that would size the output images 0x0.
+   if (g_Config.iInternalResolution < 1 || g_Config.iInternalResolution > 10)
+      g_Config.iInternalResolution = 1;
 
    var.key = "ppsspp_software_rendering";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)

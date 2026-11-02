@@ -221,5 +221,12 @@ for run in "480x272 Up to 1" "480x272 No buffer" "1440x816 Up to 1"; do
 		[ "$line" = "$ref" ] || { echo "FAIL: Vulkan pictures differ without the render thread"; exit 1; }
 	fi
 done
+# A frontend that offers no internal resolution option (or a value the core doesn't know)
+# leaves the standalone default, auto, which used to size the output images 0x0 and crash.
+out=$(VKN_FRAMES=60 VKN_DIR="$sys" timeout -k 5 600 "$here/vk_negotiate" \
+	"$root/libretro/ppsspp_libretro.so" "$data/gl/15826 hot pixel ULUS10298.ppdmp" ppsspp_backend=vulkan) \
+	|| { echo "FAIL: Vulkan frames without a resolution option"; exit 1; }
+echo "vulkan no resolution option: $(echo "$out" | grep 'frames=')"
+case "$out" in *"frames=60 shown=60 "*) ;; *) echo "FAIL: Vulkan frames without a resolution option"; exit 1;; esac
 
 echo "All image and codec checks passed."

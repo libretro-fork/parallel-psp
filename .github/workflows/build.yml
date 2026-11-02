@@ -98,10 +98,11 @@ jobs:
     - name: Check the software renderer jit
       shell: msys2 {0}
       run: |
-        make -C libretro -f Makefile -j4 platform=win test/softjitabitest test/texdecodetest test/gluploadtest
+        make -C libretro -f Makefile -j4 platform=win test/softjitabitest test/texdecodetest test/gluploadtest test/videomemtest
         libretro/test/softjitabitest.exe
         libretro/test/texdecodetest.exe
         libretro/test/gluploadtest.exe
+        libretro/test/videomemtest.exe
 
   # Reads the same disc image as ISO, CSO (two frame sizes), CHD (every codec and two hunk sizes)
   # and zipped (stored and deflated) through the core's own block devices and compares every

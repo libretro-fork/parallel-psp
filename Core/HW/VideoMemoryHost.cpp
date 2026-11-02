@@ -19,9 +19,13 @@
 
 #if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
 #include "Common/CommonWindows.h"
+#elif PPSSPP_VIDEO_MEMORY_FAULTS
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
 #endif
 
-#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#if PPSSPP_VIDEO_MEMORY_FAULTS
 retro_atomic_int_t g_videoMemoryPending;
 #endif
 
@@ -36,7 +40,7 @@ bool Protect(void *, uint32_t address, uint32_t size, bool protect) {
 }
 VideoMemory pending(Protect, nullptr, 4096);
 void PublishPending() {
-#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#if PPSSPP_VIDEO_MEMORY_FAULTS
 	retro_atomic_store_release_int(&g_videoMemoryPending, pending.Count() != 0);
 #endif
 }
@@ -62,6 +66,58 @@ LONG NTAPI VideoAccess(PEXCEPTION_POINTERS exception) {
 	handlingFault = false;
 	return resolved ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
 }
+#elif PPSSPP_VIDEO_MEMORY_FAULTS
+// The handler goes in front of whatever was there (the JIT's fault handler, say), and hands
+// anything that isn't a pending video page on to it. It runs on the faulting thread's own
+// stack, not an alternate one: filling the pages can go deep into the GPU driver.
+bool installed = false;
+pthread_t ownerThread;
+volatile sig_atomic_t handlingFault = 0;
+volatile sig_atomic_t chaining = 0;
+struct sigaction oldSegv, oldBus;
+
+void VideoAccess(int sig, siginfo_t *info, void *context);
+
+bool Current(int sig) {
+	struct sigaction current{};
+	return sigaction(sig, nullptr, &current) == 0 && (current.sa_flags & SA_SIGINFO) && current.sa_sigaction == &VideoAccess;
+}
+
+void Chain(int sig, siginfo_t *info, void *context) {
+	const struct sigaction &old = sig == SIGBUS ? oldBus : oldSegv;
+	// Reached again from the handler it hands on to (one that kept an earlier install of this
+	// one as its own previous): give the fault the default action instead of going round.
+	if (chaining) {
+		signal(sig, SIG_DFL);
+		return;
+	}
+	chaining = 1;
+	if (old.sa_flags & SA_SIGINFO) {
+		old.sa_sigaction(sig, info, context);
+	} else if (old.sa_handler == SIG_DFL) {
+		// Returning re-runs the access, which now gets the default action.
+		signal(sig, SIG_DFL);
+	} else if (old.sa_handler != SIG_IGN) {
+		old.sa_handler(sig);
+	}
+	chaining = 0;
+}
+
+void VideoAccess(int sig, siginfo_t *info, void *context) {
+	// A fault, not a signal sent with kill(). Darwin reports some PROT_NONE accesses as SIGBUS.
+	const bool access = info->si_code > 0;
+	uint32_t guest;
+	if (access && !handlingFault && pthread_equal(pthread_self(), ownerThread) && pending.Count()
+		&& Memory::VideoGuestAddress((uintptr_t)info->si_addr, &guest) && pending.Contains(guest, 1)) {
+		handlingFault = 1;
+		const bool resolved = pending.Resolve(guest, 1);
+		PublishPending();
+		handlingFault = 0;
+		if (resolved)
+			return;
+	}
+	Chain(sig, info, context);
+}
 #endif
 }
 
@@ -76,6 +132,26 @@ bool CanDeferVideoMemory() {
 		exceptionHandler = AddVectoredExceptionHandler(TRUE, VideoAccess);
 	}
 	return exceptionHandler && ownerThread == GetCurrentThreadId();
+#elif PPSSPP_VIDEO_MEMORY_FAULTS
+	if (!Memory::IsActive() || sysconf(_SC_PAGESIZE) != 4096) return false;
+	// Again if something went in front of it, or took it out, since.
+	if (!installed || !Current(SIGSEGV)) {
+		struct sigaction sa{};
+		sa.sa_sigaction = &VideoAccess;
+		// A fault while filling pages reaches the handler again, which hands it on.
+		sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+		sigemptyset(&sa.sa_mask);
+		if (sigaction(SIGSEGV, &sa, &oldSegv) != 0) return false;
+#ifdef __APPLE__
+		if (sigaction(SIGBUS, &sa, &oldBus) != 0) {
+			sigaction(SIGSEGV, &oldSegv, nullptr);
+			return false;
+		}
+#endif
+		ownerThread = pthread_self();
+		installed = true;
+	}
+	return pthread_equal(ownerThread, pthread_self()) != 0;
 #else
 	return false;
 #endif
@@ -101,5 +177,16 @@ void ResetVideoMemory() {
 	if (exceptionHandler) RemoveVectoredExceptionHandler(exceptionHandler);
 	exceptionHandler = nullptr;
 	ownerThread = 0;
+#elif PPSSPP_VIDEO_MEMORY_FAULTS
+	if (installed) {
+		// Only if nothing went in front of it since; otherwise it stays, with nothing pending.
+		if (Current(SIGSEGV))
+			sigaction(SIGSEGV, &oldSegv, nullptr);
+#ifdef __APPLE__
+		if (Current(SIGBUS))
+			sigaction(SIGBUS, &oldBus, nullptr);
+#endif
+		installed = false;
+	}
 #endif
 }

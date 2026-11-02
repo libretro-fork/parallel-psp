@@ -18,6 +18,8 @@ python3 "$here/make_vectors.py" "$data" "$root/pspautotests/tests/cpu/cpu_alu/cp
 "$here/softjitabitest"
 "$here/texdecodetest"
 "$here/gluploadtest"
+"$here/videomemtest"
+"$here/vkvideotest"
 "$here/vkheaptest"
 # The Vulkan heap is C89 for MSVC: no C99 in it.
 cc -std=c89 -ansi -pedantic -Werror=pedantic -Werror=declaration-after-statement -Wno-long-long \

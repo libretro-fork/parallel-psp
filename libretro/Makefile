@@ -500,6 +500,12 @@ TEST_LDFLAGS = $(filter-out -shared -Wl$(comma)--version-script=link.T,$(LDFLAGS
 test/%: test/%.o $(TEST_OBJECTS)
 	$(LD) $(LINKOUT)$@ $< $(TEST_OBJECTS) $(TEST_LDFLAGS) $(GL_LIB)
 
+test/videomemtest: test/videomemtest.o ../unittest/TestVideoMemoryHost.o $(TEST_OBJECTS)
+	$(LD) $(LINKOUT)$@ $< ../unittest/TestVideoMemoryHost.o $(TEST_OBJECTS) $(TEST_LDFLAGS) $(GL_LIB)
+
+test/vkvideotest: test/vkvideotest.o ../unittest/TestVulkanVideoSurface.o $(TEST_OBJECTS)
+	$(LD) $(LINKOUT)$@ $< ../unittest/TestVulkanVideoSurface.o $(TEST_OBJECTS) $(TEST_LDFLAGS) $(GL_LIB)
+
 test/lrtest: test/lrtest.c
 	$(CC) -O2 -I$(LIBRETROCOMMONDIR)/include -o $@ $< -ldl
 
@@ -513,7 +519,7 @@ test/vkheaptest: test/vkheaptest.c ../Common/GPU/Vulkan/VulkanHeap.c ../Common/G
 test/vk_negotiate: test/vk_negotiate.c
 	$(CC) -O2 -I$(LIBRETROCOMMONDIR)/include -I../ext -o $@ $< -ldl
 
-test-tools: $(TARGET) test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/gpustatstest test/gluploadtest test/vkheaptest test/vk_negotiate
+test-tools: $(TARGET) test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/gpustatstest test/gluploadtest test/videomemtest test/vkvideotest test/vkheaptest test/vk_negotiate
 
 # Native Windows make cannot spawn one command containing every object and
 # dependency sidecar. Static pattern targets keep each deletion command short.
@@ -523,7 +529,7 @@ $(CLEAN_OBJECT_TARGETS): %.clean:
 	@rm -f $* $*.d $*.deps.json
 
 clean: $(CLEAN_OBJECT_TARGETS)
-	rm -f $(TARGET) test/*.o test/*.o.d test/*.o.deps.json test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/gpustatstest test/gluploadtest test/vkheaptest test/vk_negotiate
+	rm -f $(TARGET) ../unittest/TestVideoMemoryHost.o ../unittest/TestVulkanVideoSurface.o test/*.o test/*.o.d test/*.o.deps.json test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/gpustatstest test/gluploadtest test/videomemtest test/vkvideotest test/vkheaptest test/vk_negotiate
 
 .PHONY: clean test-tools
 

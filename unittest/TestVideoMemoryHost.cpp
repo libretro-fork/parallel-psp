@@ -21,8 +21,19 @@
 #include "Core/MIPS/MIPS.h"
 #include "unittest/UnitTest.h"
 
+#if PPSSPP_VIDEO_MEMORY_FAULTS && !PPSSPP_PLATFORM(WINDOWS)
+#include <unistd.h>
+#endif
+
 bool TestVideoMemoryHost() {
-#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#if PPSSPP_VIDEO_MEMORY_FAULTS
+#if !PPSSPP_PLATFORM(WINDOWS)
+	// Deferral needs 4 KiB pages; elsewhere (16 KiB on Apple silicon) it stays off.
+	if (sysconf(_SC_PAGESIZE) != 4096) {
+		EXPECT_TRUE(!CanDeferVideoMemory());
+		return true;
+	}
+#endif
 	EXPECT_TRUE(!Memory::IsActive());
 	const auto oldCore = PSP_CoreParameter().cpuCore;
 	const u32 oldSize = Memory::g_MemorySize;

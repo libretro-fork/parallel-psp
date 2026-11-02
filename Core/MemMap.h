@@ -39,7 +39,16 @@
 //#define SAFE_MEMORY
 #endif
 
+// Guest pages the GPU fills on their first access: protected, and filled on the fault.
 #if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#define PPSSPP_VIDEO_MEMORY_FAULTS 1
+#elif PPSSPP_PLATFORM(LINUX) || PPSSPP_PLATFORM(MAC)
+#define PPSSPP_VIDEO_MEMORY_FAULTS 1
+#else
+#define PPSSPP_VIDEO_MEMORY_FAULTS 0
+#endif
+
+#if PPSSPP_VIDEO_MEMORY_FAULTS
 #include <retro_atomic.h>
 extern retro_atomic_int_t g_videoMemoryPending;
 bool ResolveVideoMemory(uint32_t address, uint32_t size);
@@ -80,7 +89,7 @@ namespace Memory {
 // Native accesses must make GPU side effects visible to the C++ compiler too.
 // Generated JIT accesses use the protected memory mappings instead.
 inline void PrepareVideoMemoryAccess(u32 address, u32 size) {
-#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#if PPSSPP_VIDEO_MEMORY_FAULTS
 	if (retro_atomic_load_acquire_int(&g_videoMemoryPending))
 		::ResolveVideoMemory(address, size);
 #endif

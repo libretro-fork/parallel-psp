@@ -39,6 +39,8 @@
 #include "Core/HW/VideoMemory.h"
 #if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
 #include "Common/CommonWindows.h"
+#elif PPSSPP_VIDEO_MEMORY_FAULTS
+#include <sys/mman.h>
 #endif
 #include "Core/MIPS/MIPS.h"
 #include "Core/MIPS/JitCommon/JitCommon.h"
@@ -131,7 +133,7 @@ static MemoryView views[] = {
 };
 
 bool ProtectVideoPages(uint32_t address, uint32_t size, bool protect) {
-#if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
+#if PPSSPP_VIDEO_MEMORY_FAULTS
 	address = VideoMemory::CanonicalAddress(address);
 	const bool vram = address >= 0x04000000 && (uint64_t)address + size <= 0x04200000;
 	const bool ram = address >= 0x08000000 && (uint64_t)address + size <= (uint64_t)0x08000000 + g_MemorySize;
@@ -146,9 +148,14 @@ bool ProtectVideoPages(uint32_t address, uint32_t size, bool protect) {
 		const uint64_t lo = std::max((uint64_t)address, (uint64_t)start);
 		const uint64_t hi = std::min((uint64_t)address + size, (uint64_t)start + view.size);
 		if (hi <= lo) continue;
+#if PPSSPP_PLATFORM(WINDOWS)
 		DWORD oldProtection;
 		if (!VirtualProtect(*view.out_ptr + (lo - start), hi - lo,
 			protect ? PAGE_NOACCESS : PAGE_READWRITE, &oldProtection)) success = false;
+#else
+		if (mprotect(*view.out_ptr + (lo - start), hi - lo, protect ? PROT_NONE : PROT_READ | PROT_WRITE) != 0)
+			success = false;
+#endif
 		found = true;
 	}
 	if (protect && !success) ProtectVideoPages(address, size, false);

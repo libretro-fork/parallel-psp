@@ -133,37 +133,142 @@ void DecVtxFormat::InitializeFromID(uint32_t id) {
 	stride = posoff + DecFmtSize(PosFmt());
 }
 
+// The smallest and largest of count indices. Every indexed draw scans its indices for these,
+// so the 8 and 16-bit ones go eight or sixteen at a time.
+static void IndexBounds16(const u16_le *ind16, int count, u16 *lower, u16 *upper) {
+	int i = 0;
+	uint16_t upperBound = 0;
+	uint16_t lowerBound = 0xFFFF;
+#if PPSSPP_ARCH(SSE2)
+	if (count >= 16) {
+		// SSE2 only compares signed words: flip the top bit to order unsigned ones that way.
+		const __m128i bias = _mm_set1_epi16((short)0x8000);
+		__m128i mn0 = _mm_set1_epi16(0x7FFF), mn1 = mn0;
+		__m128i mx0 = bias, mx1 = bias;
+		for (; i + 16 <= count; i += 16) {
+			const __m128i a = _mm_xor_si128(_mm_loadu_si128((const __m128i *)(ind16 + i)), bias);
+			const __m128i b = _mm_xor_si128(_mm_loadu_si128((const __m128i *)(ind16 + i + 8)), bias);
+			mn0 = _mm_min_epi16(mn0, a);
+			mx0 = _mm_max_epi16(mx0, a);
+			mn1 = _mm_min_epi16(mn1, b);
+			mx1 = _mm_max_epi16(mx1, b);
+		}
+		__m128i mn = _mm_min_epi16(mn0, mn1), mx = _mm_max_epi16(mx0, mx1);
+		mn = _mm_min_epi16(mn, _mm_shuffle_epi32(mn, _MM_SHUFFLE(1, 0, 3, 2)));
+		mx = _mm_max_epi16(mx, _mm_shuffle_epi32(mx, _MM_SHUFFLE(1, 0, 3, 2)));
+		mn = _mm_min_epi16(mn, _mm_shuffle_epi32(mn, _MM_SHUFFLE(2, 3, 0, 1)));
+		mx = _mm_max_epi16(mx, _mm_shuffle_epi32(mx, _MM_SHUFFLE(2, 3, 0, 1)));
+		mn = _mm_min_epi16(mn, _mm_srli_epi32(mn, 16));
+		mx = _mm_max_epi16(mx, _mm_srli_epi32(mx, 16));
+		lowerBound = (uint16_t)(_mm_cvtsi128_si32(mn) ^ 0x8000);
+		upperBound = (uint16_t)(_mm_cvtsi128_si32(mx) ^ 0x8000);
+	}
+#elif PPSSPP_ARCH(ARM_NEON)
+	if (count >= 16) {
+		uint16x8_t mn0 = vdupq_n_u16(0xFFFF), mn1 = mn0;
+		uint16x8_t mx0 = vdupq_n_u16(0), mx1 = mx0;
+		for (; i + 16 <= count; i += 16) {
+			const uint16x8_t a = vld1q_u16((const uint16_t *)(ind16 + i));
+			const uint16x8_t b = vld1q_u16((const uint16_t *)(ind16 + i + 8));
+			mn0 = vminq_u16(mn0, a);
+			mx0 = vmaxq_u16(mx0, a);
+			mn1 = vminq_u16(mn1, b);
+			mx1 = vmaxq_u16(mx1, b);
+		}
+		const uint16x8_t mn = vminq_u16(mn0, mn1), mx = vmaxq_u16(mx0, mx1);
+#if PPSSPP_ARCH(ARM64_NEON)
+		lowerBound = vminvq_u16(mn);
+		upperBound = vmaxvq_u16(mx);
+#else
+		uint16x4_t mn4 = vpmin_u16(vget_low_u16(mn), vget_high_u16(mn));
+		uint16x4_t mx4 = vpmax_u16(vget_low_u16(mx), vget_high_u16(mx));
+		mn4 = vpmin_u16(mn4, mn4);
+		mx4 = vpmax_u16(mx4, mx4);
+		mn4 = vpmin_u16(mn4, mn4);
+		mx4 = vpmax_u16(mx4, mx4);
+		lowerBound = vget_lane_u16(mn4, 0);
+		upperBound = vget_lane_u16(mx4, 0);
+#endif
+	}
+#endif
+	for (; i < count; i++) {
+		const u16 value = ind16[i];
+		if (value > upperBound)
+			upperBound = value;
+		if (value < lowerBound)
+			lowerBound = value;
+	}
+	*lower = lowerBound;
+	*upper = upperBound;
+}
+
+static void IndexBounds8(const u8 *ind8, int count, u16 *lower, u16 *upper) {
+	int i = 0;
+	uint8_t upperBound = 0;
+	uint8_t lowerBound = 0xFF;
+#if PPSSPP_ARCH(SSE2)
+	if (count >= 16) {
+		__m128i mn = _mm_set1_epi8((char)0xFF);
+		__m128i mx = _mm_setzero_si128();
+		for (; i + 16 <= count; i += 16) {
+			const __m128i a = _mm_loadu_si128((const __m128i *)(ind8 + i));
+			mn = _mm_min_epu8(mn, a);
+			mx = _mm_max_epu8(mx, a);
+		}
+		mn = _mm_min_epu8(mn, _mm_shuffle_epi32(mn, _MM_SHUFFLE(1, 0, 3, 2)));
+		mx = _mm_max_epu8(mx, _mm_shuffle_epi32(mx, _MM_SHUFFLE(1, 0, 3, 2)));
+		mn = _mm_min_epu8(mn, _mm_shuffle_epi32(mn, _MM_SHUFFLE(2, 3, 0, 1)));
+		mx = _mm_max_epu8(mx, _mm_shuffle_epi32(mx, _MM_SHUFFLE(2, 3, 0, 1)));
+		mn = _mm_min_epu8(mn, _mm_srli_epi32(mn, 16));
+		mx = _mm_max_epu8(mx, _mm_srli_epi32(mx, 16));
+		mn = _mm_min_epu8(mn, _mm_srli_epi16(mn, 8));
+		mx = _mm_max_epu8(mx, _mm_srli_epi16(mx, 8));
+		lowerBound = (uint8_t)_mm_cvtsi128_si32(mn);
+		upperBound = (uint8_t)_mm_cvtsi128_si32(mx);
+	}
+#elif PPSSPP_ARCH(ARM_NEON)
+	if (count >= 16) {
+		uint8x16_t mn = vdupq_n_u8(0xFF);
+		uint8x16_t mx = vdupq_n_u8(0);
+		for (; i + 16 <= count; i += 16) {
+			const uint8x16_t a = vld1q_u8(ind8 + i);
+			mn = vminq_u8(mn, a);
+			mx = vmaxq_u8(mx, a);
+		}
+#if PPSSPP_ARCH(ARM64_NEON)
+		lowerBound = vminvq_u8(mn);
+		upperBound = vmaxvq_u8(mx);
+#else
+		uint8x8_t mn8 = vpmin_u8(vget_low_u8(mn), vget_high_u8(mn));
+		uint8x8_t mx8 = vpmax_u8(vget_low_u8(mx), vget_high_u8(mx));
+		mn8 = vpmin_u8(mn8, mn8);
+		mx8 = vpmax_u8(mx8, mx8);
+		mn8 = vpmin_u8(mn8, mn8);
+		mx8 = vpmax_u8(mx8, mx8);
+		mn8 = vpmin_u8(mn8, mn8);
+		mx8 = vpmax_u8(mx8, mx8);
+		lowerBound = vget_lane_u8(mn8, 0);
+		upperBound = vget_lane_u8(mx8, 0);
+#endif
+	}
+#endif
+	for (; i < count; i++) {
+		const u8 value = ind8[i];
+		if (value > upperBound)
+			upperBound = value;
+		if (value < lowerBound)
+			lowerBound = value;
+	}
+	*lower = lowerBound;
+	*upper = upperBound;
+}
+
 void GetIndexBounds(const void *inds, int count, u32 vertType, u16 *indexLowerBound, u16 *indexUpperBound) {
-	// Find index bounds. Could cache this in display lists.
-	// Also, this could be greatly sped up with SSE2/NEON, although rarely a bottleneck, and some compilers
-	// autovectorize this just fine. (Though, it should be noted, MSVC generates really crap code here...).
 	u32 idx = vertType & GE_VTYPE_IDX_MASK;
 	if (idx == GE_VTYPE_IDX_16BIT) {
-		uint16_t upperBound = 0;
-		uint16_t lowerBound = 0xFFFF;
-		const u16_le *ind16 = (const u16_le *)inds;
-		for (int i = 0; i < count; i++) {
-			const u16 value = ind16[i];
-			if (value > upperBound)
-				upperBound = value;
-			if (value < lowerBound)
-				lowerBound = value;
-		}
-		*indexLowerBound = lowerBound;
-		*indexUpperBound = upperBound;
+		IndexBounds16((const u16_le *)inds, count, indexLowerBound, indexUpperBound);
 	} else if (idx == GE_VTYPE_IDX_8BIT) {
-		uint8_t upperBound = 0;
-		uint8_t lowerBound = 0xFF;
-		const u8 *ind8 = (const u8 *)inds;
-		for (int i = 0; i < count; i++) {
-			const u8 value = ind8[i];
-			if (value > upperBound)
-				upperBound = value;
-			if (value < lowerBound)
-				lowerBound = value;
-		}
-		*indexLowerBound = lowerBound;
-		*indexUpperBound = upperBound;
+		IndexBounds8((const u8 *)inds, count, indexLowerBound, indexUpperBound);
 	} else if (idx == GE_VTYPE_IDX_32BIT) {
 		int lowerBound = 0x7FFFFFFF;
 		int upperBound = 0;

@@ -506,6 +506,19 @@ test/videomemtest: test/videomemtest.o ../unittest/TestVideoMemoryHost.o $(TEST_
 test/vkvideotest: test/vkvideotest.o ../unittest/TestVulkanVideoSurface.o $(TEST_OBJECTS)
 	$(LD) $(LINKOUT)$@ $< ../unittest/TestVulkanVideoSurface.o $(TEST_OBJECTS) $(TEST_LDFLAGS) $(GL_LIB)
 
+# tesscachetest again with AddressSanitizer on the curve code it runs. The core's other objects
+# are the usual ones, so this needs no sanitized build of the whole core.
+CURVE_ASAN_SOURCES = ../GPU/Common/SplineCommon.cpp ../GPU/Common/VertexDecoderCommon.cpp ../GPU/Common/DrawEngineCommon.cpp
+CURVE_ASAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+CURVE_ASAN_OBJECTS = $(CURVE_ASAN_SOURCES:.cpp=.asan.o) test/tesscachetest.asan.o
+
+%.asan.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(CURVE_ASAN_FLAGS) $(DEPFLAGS) -c $(OBJOUT)$@ $<
+	$(DEPPOST)
+
+test/tesscachetest-asan: $(CURVE_ASAN_OBJECTS) $(TEST_OBJECTS)
+	$(LD) $(LINKOUT)$@ $(CURVE_ASAN_OBJECTS) $(filter-out $(CURVE_ASAN_SOURCES:.cpp=.o),$(TEST_OBJECTS)) $(TEST_LDFLAGS) $(GL_LIB) $(CURVE_ASAN_FLAGS)
+
 test/lrtest: test/lrtest.c
 	$(CC) -O2 -I$(LIBRETROCOMMONDIR)/include -o $@ $< -ldl
 
@@ -519,7 +532,7 @@ test/vkheaptest: test/vkheaptest.c ../Common/GPU/Vulkan/VulkanHeap.c ../Common/G
 test/vk_negotiate: test/vk_negotiate.c
 	$(CC) -O2 -I$(LIBRETROCOMMONDIR)/include -I../ext -o $@ $< -ldl
 
-test-tools: $(TARGET) test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/gpustatstest test/gluploadtest test/videomemtest test/vkvideotest test/vkheaptest test/vk_negotiate
+test-tools: $(TARGET) test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/indexboundstest test/tesscachetest test/tesscachetest-asan test/gpustatstest test/gluploadtest test/videomemtest test/vkvideotest test/vkheaptest test/vk_negotiate
 
 # Native Windows make cannot spawn one command containing every object and
 # dependency sidecar. Static pattern targets keep each deletion command short.
@@ -529,11 +542,13 @@ $(CLEAN_OBJECT_TARGETS): %.clean:
 	@rm -f $* $*.d $*.deps.json
 
 clean: $(CLEAN_OBJECT_TARGETS)
-	rm -f $(TARGET) ../unittest/TestVideoMemoryHost.o ../unittest/TestVulkanVideoSurface.o test/*.o test/*.o.d test/*.o.deps.json test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/gpustatstest test/gluploadtest test/videomemtest test/vkvideotest test/vkheaptest test/vk_negotiate
+	rm -f $(TARGET) ../unittest/TestVideoMemoryHost.o ../unittest/TestVulkanVideoSurface.o $(CURVE_ASAN_OBJECTS) $(addsuffix .d,$(CURVE_ASAN_OBJECTS)) ../unittest/*.o.d test/*.o test/*.o.d test/*.o.deps.json test/codectest test/blocktest test/lrtest test/lrgltest test/atrac3ptest test/mediatest test/gldelayedtest test/mbitest test/sasreverbtest test/aacstatetest test/metimetest test/swmathtest test/softjitabitest test/texdecodetest test/indexboundstest test/tesscachetest test/tesscachetest-asan test/gpustatstest test/gluploadtest test/videomemtest test/vkvideotest test/vkheaptest test/vk_negotiate
 
 .PHONY: clean test-tools
 
--include $(addsuffix .d,$(OBJECTS)) $(wildcard test/*.o.d)
+# The tests' own objects outside the core's: unittest/ and the sanitized curve objects too, or a
+# header change leaves them built against the old layout.
+-include $(addsuffix .d,$(OBJECTS)) $(wildcard test/*.o.d) $(wildcard ../unittest/*.o.d) $(wildcard $(addsuffix .d,$(CURVE_ASAN_OBJECTS)))
 
 print-%:
 	@echo '$*=$($*)'

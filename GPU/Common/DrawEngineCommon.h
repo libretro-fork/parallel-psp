@@ -59,7 +59,7 @@ enum FBOTexState {
 };
 
 struct SimpleVertex;
-namespace Spline { struct Weight2D; }
+namespace Spline { struct Weight2D; class TessellationCache; }
 
 // Culling plane, group of 8.
 struct alignas(16) Plane8 {
@@ -124,6 +124,7 @@ public:
 	template<class Surface>
 	void SubmitCurve(const void *control_points, const void *indices, Surface &surface, u32 vertType, int *bytesRead, const char *scope);
 	static void ClearSplineBezierWeights();
+	void DestroyTessellationCache();
 
 	bool CanUseHardwareTransform(int prim) const;
 
@@ -276,6 +277,9 @@ protected:
 	bool useHWTransform_ = false;
 	// Used to prevent unnecessary flushing in softgpu.
 	bool flushOnParams_ = true;
+
+	// Curves drawn again with the same control points and settings, tessellated once.
+	Spline::TessellationCache *tessCache_ = nullptr;
 
 	// Set once a equal depth test is encountered.
 	bool everUsedEqualDepth_ = false;

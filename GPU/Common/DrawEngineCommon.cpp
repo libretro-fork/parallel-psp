@@ -76,6 +76,7 @@ DrawEngineCommon::~DrawEngineCommon() {
 		delete decoder;
 	});
 	ClearSplineBezierWeights();
+	DestroyTessellationCache();
 }
 
 void DrawEngineCommon::Init() {

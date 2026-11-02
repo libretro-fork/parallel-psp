@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstring>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include "Common/Common.h"
@@ -29,6 +30,8 @@
 #include "GPU/Common/SoftwareTransformCommon.h"
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"  // only needed for UVScale stuff
+#include "GPU/GPU.h"
+#include "ext/xxhash.h"
 #include "GPU/Software/GEMath.h"
 
 class SimpleBufferManager {
@@ -384,7 +387,9 @@ public:
 		Weight *weights = new Weight[tess * num_patches + 1];
 
 	//	float *knots = new float[num_patches + 5];
-		float *knots = new float[num_patches + 2]; // Optimized with KnotDiv, must use +5 in theory 
+		// Optimized with KnotDiv, must use +5 in theory. CalcKnots fills num_patches + 2, but the
+		// SSE path of CalcWeights loads four from knots + i, one past those for the last patch.
+		float *knots = new float[num_patches + 3]();
 		KnotDiv *divs = new KnotDiv[num_patches];
 		CalcKnots(num_patches, type, knots, divs);
 
@@ -565,6 +570,12 @@ static void TessellateSplineGE(OutputBuffers &output, const SplineSurface &surfa
 			}
 		}
 	}
+}
+
+// Whether the tessellation evaluates normals: Tessellate's first parameter.
+static bool CurveNeedsNormals(u32 origVertType) {
+	// Shade mapping uses the normal even with lighting off (gpu/probe exp143).
+	return (origVertType & GE_VTYPE_NRM_MASK) != 0 || gstate.isLightingEnabled() || gstate.getUVGenMode() == GE_TEXMAP_ENVIRONMENT_MAP;
 }
 
 template<class Surface>
@@ -756,8 +767,7 @@ public:
 
 	static void Tessellate(OutputBuffers &output, const Surface &surface, const ControlPoints &points, const Weight2D &weights, u32 origVertType) {
 		const bool params[] = {
-			// Shade mapping uses the normal even with lighting off (gpu/probe exp143).
-			(origVertType & GE_VTYPE_NRM_MASK) != 0 || gstate.isLightingEnabled() || gstate.getUVGenMode() == GE_TEXMAP_ENVIRONMENT_MAP,
+			CurveNeedsNormals(origVertType),
 			(origVertType & GE_VTYPE_COL_MASK) != 0,
 			(origVertType & GE_VTYPE_TC_MASK) != 0,
 			cpu_info.bSSE4_1,
@@ -768,6 +778,172 @@ public:
 		TessFunc func = dispatcher.GetFunc(params);
 		func(output, surface, points, weights);
 	}
+};
+
+
+// Tessellated curves, by everything the tessellation reads: the control points as it sees them
+// and the surface. Games draw the same patches frame after frame - Pursuit Force a thousand a
+// frame - and tessellating them took about as long as the rest of drawing them together.
+// A curve is stored once it is drawn again in a later frame, so control points that change
+// every frame cost a hash and a lookup and nothing more - and when hardly anything is found for
+// a while, the cache stands aside for a few seconds before trying again. Entries not used for a
+// couple of seconds go, and the whole cache stays within a fixed size.
+class TessellationCache {
+public:
+	struct Params {
+		u32 origVertType;
+		u32 vertType;
+		u32 bezier;
+		u32 tessU, tessV;
+		u32 pointsU, pointsV;
+		u32 typeU, typeV;
+		u32 primType;
+		u32 patchFacing;
+		u32 normals;
+	};
+
+	struct Entry {
+		Entry *next;
+		Params params;
+		int numPoints;
+		int numVerts;
+		int count;
+		int lastUsed;
+		size_t bytes;
+
+		SimpleVertex *Points() { return (SimpleVertex *)(this + 1); }
+		SimpleVertex *Vertices() { return Points() + numPoints; }
+		u16 *Indices() { return (u16 *)(Vertices() + numVerts); }
+	};
+
+	~TessellationCache() {
+		for (auto &it : map_)
+			FreeChain(it.second);
+	}
+
+	// Whether to look curves up at all this frame. A window of PROBE_FRAMES that finds less than
+	// one in sixteen is followed by BYPASS_FRAMES without lookups.
+	bool Active(int frame) {
+		if (frame < windowStart_ || frame - windowStart_ >= (bypass_ ? BYPASS_FRAMES : PROBE_FRAMES)) {
+			bypass_ = !bypass_ && lookups_ >= 256 && hits_ * 16 < lookups_;
+			windowStart_ = frame;
+			lookups_ = 0;
+			hits_ = 0;
+		}
+		return !bypass_;
+	}
+
+	Entry *Find(u64 hash, const Params &params, const SimpleVertex *points, int numPoints, int frame) {
+		Sweep(frame, AGE_FRAMES);
+		lookups_++;
+		auto it = map_.find(hash);
+		if (it == map_.end())
+			return nullptr;
+		for (Entry *e = it->second; e; e = e->next) {
+			if (e->numPoints == numPoints && memcmp(&e->params, &params, sizeof(params)) == 0 &&
+				memcmp(e->Points(), points, sizeof(SimpleVertex) * numPoints) == 0) {
+				e->lastUsed = frame;
+				hits_++;
+				return e;
+			}
+		}
+		return nullptr;
+	}
+
+	// Whether the curve was drawn in an earlier frame too, and is worth keeping now. Remembers
+	// hashes in a small table without chains: a slot taken by another curve just forgets one.
+	bool SeenInEarlierFrame(u64 hash, int frame) {
+		Seen &slot = seen_[(hash ^ (hash >> 32)) & (SEEN_SLOTS - 1)];
+		if (slot.hash == hash && slot.frame != frame)
+			return true;
+		if (slot.hash != hash) {
+			slot.hash = hash;
+			slot.frame = frame;
+		}
+		return false;
+	}
+
+	Entry *Add(u64 hash, const Params &params, const SimpleVertex *points, int numPoints, const OutputBuffers &output, int numVerts, int frame) {
+		const size_t bytes = sizeof(Entry) + sizeof(SimpleVertex) * (numPoints + numVerts) + sizeof(u16) * output.count;
+		if (bytes > MAX_BYTES / 16)
+			return nullptr;
+		if (bytes_ + bytes > MAX_BYTES) {
+			// Make room from what this frame and the last didn't draw.
+			Sweep(frame, 1, true);
+			if (bytes_ + bytes > MAX_BYTES)
+				return nullptr;
+		}
+		Entry *e = (Entry *)malloc(bytes);
+		if (!e)
+			return nullptr;
+		e->params = params;
+		e->numPoints = numPoints;
+		e->numVerts = numVerts;
+		e->count = output.count;
+		e->lastUsed = frame;
+		e->bytes = bytes;
+		memcpy(e->Points(), points, sizeof(SimpleVertex) * numPoints);
+		memcpy(e->Vertices(), output.vertices, sizeof(SimpleVertex) * numVerts);
+		memcpy(e->Indices(), output.indices, sizeof(u16) * output.count);
+		Entry *&head = map_[hash];
+		e->next = head;
+		head = e;
+		bytes_ += bytes;
+		return e;
+	}
+
+private:
+	static constexpr int AGE_FRAMES = 120;
+	static constexpr size_t MAX_BYTES = 16 * 1024 * 1024;
+	static constexpr size_t SEEN_SLOTS = 4096;
+	static constexpr int PROBE_FRAMES = 16;
+	static constexpr int BYPASS_FRAMES = 240;
+
+	// Drops the entries not used in the last maxAge frames, at most once a frame unless forced.
+	void Sweep(int frame, int maxAge, bool force = false) {
+		if (!force && frame == lastSweep_)
+			return;
+		lastSweep_ = frame;
+		for (auto it = map_.begin(); it != map_.end();) {
+			Entry **link = &it->second;
+			while (*link) {
+				Entry *e = *link;
+				// The flip count starts again from zero with a new game.
+				if (frame - e->lastUsed > maxAge || frame < e->lastUsed) {
+					*link = e->next;
+					bytes_ -= e->bytes;
+					free(e);
+				} else {
+					link = &e->next;
+				}
+			}
+			if (!it->second)
+				it = map_.erase(it);
+			else
+				++it;
+		}
+	}
+
+	static void FreeChain(Entry *e) {
+		while (e) {
+			Entry *next = e->next;
+			free(e);
+			e = next;
+		}
+	}
+
+	std::unordered_map<u64, Entry *> map_;
+	struct Seen {
+		u64 hash;
+		int frame;
+	};
+	Seen seen_[SEEN_SLOTS]{};
+	size_t bytes_ = 0;
+	int lastSweep_ = -1;
+	int windowStart_ = 0;
+	int lookups_ = 0;
+	int hits_ = 0;
+	bool bypass_ = false;
 };
 
 template<class Surface>
@@ -791,6 +967,12 @@ void DrawEngineCommon::ClearSplineBezierWeights() {
 	Bezier3DWeight::weightsCache.Clear();
 	Spline3DWeight::weightsCache.Clear();
 }
+
+void DrawEngineCommon::DestroyTessellationCache() {
+	delete tessCache_;
+	tessCache_ = nullptr;
+}
+
 
 // Specialize to make instance (to avoid link error).
 template void DrawEngineCommon::SubmitCurve<BezierSurface>(const void *control_points, const void *indices, BezierSurface &surface, u32 vertType, int *bytesRead, const char *scope);
@@ -863,12 +1045,69 @@ void DrawEngineCommon::SubmitCurve(const void *control_points, const void *indic
 
 	surface.Init(maxVerts);
 
-	ControlPoints cpoints(points, num_points, managedBuf);
-	if (cpoints.IsValid()) {
-		// Run the tessellation!
-		SoftwareTessellation(output, surface, origVertType, cpoints);
+	// Cached curves are drawn straight from their entry, so only with each curve flushed before
+	// the next one can drop it. The software renderer's exact evaluation is not cached.
+	SimpleVertex *key = nullptr;
+	TessellationCache::Params params{};
+	u64 hash = 0;
+	TessellationCache::Entry *cached = nullptr;
+	if (flushOnParams_ && !surface.geExact) {
+		if (!tessCache_)
+			tessCache_ = new TessellationCache();
+		if (tessCache_->Active(gpuStats.totals.numFlips))
+			key = (SimpleVertex *)managedBuf.Allocate(sizeof(SimpleVertex) * num_points);
+	}
+	if (key) {
+		// The control points as the tessellation reads them: normals it derives from the
+		// positions, and texture coordinates it generates when the vertices have none.
+		const bool tex = (origVertType & GE_VTYPE_TC_MASK) != 0;
+		for (int i = 0; i < num_points; i++) {
+			SimpleVertex &k = key[i];
+			memset(&k, 0, sizeof(k));
+			if (tex) {
+				k.uv[0] = points[i]->uv[0];
+				k.uv[1] = points[i]->uv[1];
+			}
+			k.color_32 = points[i]->color_32;
+			k.pos = points[i]->pos;
+		}
+		params.origVertType = origVertType;
+		params.vertType = vertType;
+		params.bezier = std::is_same_v<Surface, BezierSurface>;
+		params.tessU = surface.tess_u;
+		params.tessV = surface.tess_v;
+		params.pointsU = surface.num_points_u;
+		params.pointsV = surface.num_points_v;
+		// Beziers don't have knot types.
+		params.typeU = params.bezier ? 0 : surface.type_u;
+		params.typeV = params.bezier ? 0 : surface.type_v;
+		params.primType = surface.primType;
+		params.patchFacing = surface.patchFacing;
+		params.normals = CurveNeedsNormals(origVertType);
+		hash = XXH3_64bits(key, sizeof(SimpleVertex) * num_points) ^ (XXH3_64bits(&params, sizeof(params)) * 0x9E3779B97F4A7C15ULL);
+		cached = tessCache_->Find(hash, params, key, num_points, gpuStats.totals.numFlips);
+	}
+
+	if (cached) {
+		// The flush below is done with the entry before anything can drop it.
+		output.vertices = cached->Vertices();
+		output.indices = cached->Indices();
+		output.count = cached->count;
+		gpuStats.perFrame.numCachedCurves++;
 	} else {
-		ERROR_LOG(Log::G3D, "Failed to allocate space for control point values, skipping curve draw");
+		ControlPoints cpoints(points, num_points, managedBuf);
+		if (cpoints.IsValid()) {
+			// Run the tessellation!
+			SoftwareTessellation(output, surface, origVertType, cpoints);
+			if (key && tessCache_->SeenInEarlierFrame(hash, gpuStats.totals.numFlips)) {
+				u16 lower = 0, upper = 0;
+				if (output.count)
+					GetIndexBounds(output.indices, output.count, GE_VTYPE_IDX_16BIT, &lower, &upper);
+				tessCache_->Add(hash, params, key, num_points, output, output.count ? upper + 1 : 0, gpuStats.totals.numFlips);
+			}
+		} else {
+			ERROR_LOG(Log::G3D, "Failed to allocate space for control point values, skipping curve draw");
+		}
 	}
 
 	u32 vertTypeWithIndex16 = (vertType & ~GE_VTYPE_IDX_MASK) | GE_VTYPE_IDX_16BIT;

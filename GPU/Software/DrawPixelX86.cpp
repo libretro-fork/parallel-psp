@@ -60,6 +60,15 @@ SingleFunc PixelJitCache::CompileSingle(const PixelFuncID &id) {
 	else
 		stackSpace = WriteProlog(0, {}, {});
 	stackIDOffset_ = stackSpace + 8 + 8 + 4 * PTRBITS / 8;
+#if SOFTRAST_VECTOR_ARGS_BY_REF
+	// The color's address, in its position's stack slot just before the id's. RAX is no argument.
+	{
+		X64Reg colorReg = regCache_.Find(RegCache::VEC_ARG_COLOR);
+		MOV(PTRBITS, R(RAX), MDisp(RSP, stackIDOffset_ - PTRBITS / 8));
+		MOVDQU(colorReg, MatR(RAX));
+		regCache_.Unlock(colorReg, RegCache::VEC_ARG_COLOR);
+	}
+#endif
 #else
 	_assert_(regCache_.Has(RegCache::GEN_ARG_ID));
 	WriteProlog(0, {}, {});

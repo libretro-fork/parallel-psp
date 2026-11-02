@@ -97,9 +97,16 @@ static inline Vec4FloatArg ToVec4FloatArg(const Math3D::Vec4<float> &a) { return
 
 #if PPSSPP_ARCH(AMD64) && PPSSPP_PLATFORM(WINDOWS) && (defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER))
 #define SOFTRAST_CALL __vectorcall
+#define SOFTRAST_VECTORCALL 1
 #else
 #define SOFTRAST_CALL
+#define SOFTRAST_VECTORCALL 0
 #endif
+
+// Windows without __vectorcall (GCC, as in MinGW builds) passes a vector argument by reference: its
+// address goes where the register would have been, in the integer register or stack slot of its
+// position. The jitted functions want it in its XMM register, as __vectorcall puts it.
+#define SOFTRAST_VECTOR_ARGS_BY_REF (PPSSPP_ARCH(AMD64) && PPSSPP_PLATFORM(WINDOWS) && !SOFTRAST_VECTORCALL)
 
 struct RegCache {
 	enum Purpose {

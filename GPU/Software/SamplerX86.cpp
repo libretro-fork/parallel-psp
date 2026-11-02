@@ -123,6 +123,15 @@ NearestFunc SamplerJitCache::CompileNearest(const SamplerID &id) {
 		RegCache::GEN_ARG_ID,
 	});
 
+#if SOFTRAST_VECTOR_ARGS_BY_REF
+	// The color's address, in its position's register.
+	{
+		X64Reg colorReg = regCache_.Find(RegCache::VEC_ARG_COLOR);
+		MOVDQU(colorReg, MatR(R8));
+		regCache_.Unlock(colorReg, RegCache::VEC_ARG_COLOR);
+	}
+#endif
+
 #if PPSSPP_PLATFORM(WINDOWS)
 	// RET + shadow space.
 	stackArgPos_ = 8 + 32;
@@ -504,6 +513,15 @@ LinearFunc SamplerJitCache::CompileLinear(const SamplerID &id) {
 
 	// Use the red zone.
 	stackUV1Offset_ = -stackArgPos_ - 8;
+#endif
+
+#if SOFTRAST_VECTOR_ARGS_BY_REF
+	// The color's address, in its position's register. After the prolog, where the function starts.
+	{
+		X64Reg colorReg = regCache_.Find(RegCache::VEC_ARG_COLOR);
+		MOVDQU(colorReg, MatR(R8));
+		regCache_.Unlock(colorReg, RegCache::VEC_ARG_COLOR);
+	}
 #endif
 
 	// This is what we'll put in them, anyway...
